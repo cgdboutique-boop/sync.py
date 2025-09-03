@@ -6,11 +6,12 @@ import re
 def clean_text(text):
     if not text:
         return ""
-    # Remove specific HTML tags
-    text = re.sub(r"</?p>", "", text)  # remove <p> and </p>
-    text = re.sub(r"</?span.*?>", "", text)  # remove <span ...> and </span>
-    # Remove specific unwanted fragment
-    text = text.replace('Â', "")
+    # Remove <p> and </p>
+    text = re.sub(r"</?p>", "", text)
+    # Remove all <span> tags including attributes like data-mce-fragment
+    text = re.sub(r"</?span.*?>", "", text)
+    # Remove special characters
+    text = text.replace("Â", "")
     # Strip extra whitespace
     return text.strip()
 
@@ -62,3 +63,22 @@ for product in supplier_products:
         "product": {
             "title": clean_text(product.get("body_html", "No Title")),  # supplier body -> title
             "body_html": clean_text(product.get("title", "")),          # supplier title -> description
+            "product_type": product.get("product_type", ""),
+            "tags": ",".join(product.get("tags", [])) if isinstance(product.get("tags"), list) else product.get("tags", ""),
+            "variants": variants,
+            "images": images,
+            "published": True
+            # vendor removed
+        }
+    }
+
+    # Update existing product if SKU exists, else create new
+    supplier_sku = variants[0].get("sku")
+    if supplier_sku in sku_to_product_id:
+        product_id = sku_to_product_id[supplier_sku]
+        update_url = f"https://cgdboutique.myshopify.com/admin/api/2023-10/products/{product_id}.json"
+        response = requests.put(update_url, headers=shopify_headers, json=payload)
+        print(f"Updated SKU {supplier_sku}: {response.status_code}")
+    else:
+        response = requests.post(SHOP_URL, headers=shopify_headers, json=payload)
+        print(f"Created SKU {supplier_sku}: {response.status_code}")
