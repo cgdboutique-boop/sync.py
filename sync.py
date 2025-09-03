@@ -53,7 +53,9 @@ for product in supplier_products:
             "option1": variant.get("option1", ""),
             "sku": variant.get("sku", ""),
             "inventory_quantity": variant.get("inventory_quantity", 0),
-            "price": variant.get("price", "0.00")
+            "price": variant.get("price", "0.00"),
+            "inventory_management": "shopify",        # Track inventory
+            "inventory_policy": "continue"            # Optional: allow overselling
         })
 
     images = [{"src": img["src"]} for img in product.get("images", [])] if product.get("images") else []
