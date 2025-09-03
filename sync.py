@@ -58,17 +58,20 @@ for product in supplier_products:
 
     images = [{"src": img["src"]} for img in product.get("images", [])] if product.get("images") else []
 
-    # Swap title and body_html, clean text, remove vendor
+    # Swap title/body, clean text, remove vendor
+    supplier_body = clean_text(product.get("body_html", ""))
+    supplier_title = clean_text(product.get("title", "No Title"))
+
     payload = {
         "product": {
-            "title": clean_text(product.get("body_html", "No Title")),  # supplier body -> title
-            "body_html": clean_text(product.get("title", "")),          # supplier title -> description
+            "title": supplier_body if supplier_body else "No Title",   # supplier body -> Shopify title
+            "body_html": supplier_title,                                # supplier title -> Shopify description
+            "vendor": "",                                               # remove vendor
             "product_type": product.get("product_type", ""),
             "tags": ",".join(product.get("tags", [])) if isinstance(product.get("tags"), list) else product.get("tags", ""),
             "variants": variants,
             "images": images,
             "published": True
-            # vendor removed
         }
     }
 
