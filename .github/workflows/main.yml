@@ -1,9 +1,9 @@
 name: Shopify Sync
 
 on:
-  workflow_dispatch:   # manual run
+  workflow_dispatch:   # allows manual run
   schedule:
-    - cron: "0 2 * * *"   # runs every day at 2AM UTC
+    - cron: "0 0 * * *"  # daily at 2AM South Africa time (00:00 UTC)
 
 jobs:
   run-sync:
