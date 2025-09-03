@@ -32,17 +32,17 @@ for product in supplier_products:
     images = [{"src": img["src"]} for img in product.get("images", [])] if product.get("images") else []
 
     payload = {
-        "product": {
-            "title": product.get("title", "No Title"),
-            "body_html": product.get("body_html", ""),
-            "vendor": product.get("vendor", ""),
-            "product_type": product.get("product_type", ""),
-            "tags": product.get("tags", ""),
-            "variants": variants,
-            "images": images,
-            "published": True
-        }
+    "product": {
+        "title": product.get("body_html", "No Title"),  # supplier body -> title
+        "body_html": product.get("title", ""),          # supplier title -> description
+        "product_type": product.get("product_type", ""),
+        "tags": ",".join(product.get("tags", [])) if isinstance(product.get("tags"), list) else product.get("tags", ""),
+        "variants": variants,
+        "images": images,
+        "published": True
+        # Removed vendor
     }
+}
 
     response = requests.post(SHOP_URL, headers=shopify_headers, json=payload)
     print(response.status_code, response.json())
