@@ -1,89 +1,138 @@
-import os
 import requests
+import os
 import re
-
-# Helper function to clean text
-def clean_text(text):
-    if not text:
-        return ""
-    # Remove <p> and </p>
-    text = re.sub(r"</?p>", "", text)
-    # Remove all <span> tags including attributes like data-mce-fragment
-    text = re.sub(r"</?span.*?>", "", text)
-    # Remove special characters
-    text = text.replace("Â", "")
-    # Strip extra whitespace
-    return text.strip()
 
 # Supplier API
 SUPPLIER_API_URL = "https://the-brave-ones-childrens-fashion.myshopify.com/admin/api/2023-10/products.json"
 SUPPLIER_TOKEN = os.getenv("SUPPLIER_TOKEN")
 
-supplier_headers = {"X-Shopify-Access-Token": SUPPLIER_TOKEN}
-supplier_response = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
-
-if supplier_response.status_code != 200:
-    print("Supplier API request failed:", supplier_response.text)
-    exit(1)
-
-supplier_products = supplier_response.json().get("products", [])
-
-# Shopify API
-SHOP_URL = "https://cgdboutique.myshopify.com/admin/api/2023-10/products.json"
+# Your Shopify store API
+SHOP_URL = "https://cgdboutique.myshopify.com/admin/api/2023-10"
 SHOPIFY_TOKEN = os.getenv("SHOPIFY_TOKEN")
+
+supplier_headers = {"X-Shopify-Access-Token": SUPPLIER_TOKEN}
 shopify_headers = {"X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json"}
 
-# Fetch existing Shopify products to check SKUs
-shopify_response = requests.get(SHOP_URL, headers=shopify_headers)
-if shopify_response.status_code != 200:
-    print("Shopify API request failed:", shopify_response.text)
-    exit(1)
 
-existing_products = shopify_response.json().get("products", [])
-sku_to_product_id = {}
-for prod in existing_products:
-    for variant in prod.get("variants", []):
-        sku_to_product_id[variant.get("sku")] = prod.get("id")
+def clean_text(text):
+    """Remove unwanted tags/characters from titles and descriptions."""
+    if not text:
+        return ""
+    # Remove <p>, </p>, Â, <span>, <span data-mce-fragment="1">
+    cleaned = re.sub(r"<\/?p>|Â|<\/?span.*?>", "", text)
+    return cleaned.strip()
 
-# Loop through supplier products
-for product in supplier_products:
-    variants = []
-    for variant in product.get("variants", []):
-        variants.append({
-            "option1": variant.get("option1", ""),
-            "sku": variant.get("sku", ""),
-            "inventory_quantity": variant.get("inventory_quantity", 0),
-            "price": variant.get("price", "0.00"),
-            "inventory_management": "shopify",        # Track inventory
-            "inventory_policy": "continue"            # Optional: allow overselling
-        })
 
-    images = [{"src": img["src"]} for img in product.get("images", [])] if product.get("images") else []
+def get_existing_skus():
+    """Fetch all existing SKUs from Shopify to prevent duplicates."""
+    existing_skus = set()
+    url = f"{SHOP_URL}/products.json?limit=250"
+    while url:
+        resp = requests.get(url, headers=shopify_headers).json()
+        products = resp.get("products", [])
+        for product in products:
+            for variant in product.get("variants", []):
+                if variant.get("sku"):
+                    existing_skus.add(variant["sku"])
+        # Pagination
+        link = resp.get("link")
+        url = None
+        if link and 'rel="next"' in link:
+            url = link.split(";")[0].strip("<>")
+    return existing_skus
 
-    # Swap title/body, clean text, remove vendor
-    supplier_body = clean_text(product.get("body_html", ""))
-    supplier_title = clean_text(product.get("title", "No Title"))
 
+def update_inventory(inventory_item_id, location_id, quantity):
+    """Set inventory levels explicitly in Shopify."""
     payload = {
-        "product": {
-            "title": supplier_body if supplier_body else "No Title",   # supplier body -> Shopify title
-            "body_html": supplier_title,                                # supplier title -> Shopify description
-            "vendor": "",                                               # remove vendor
-            "product_type": product.get("product_type", ""),
-            "tags": ",".join(product.get("tags", [])) if isinstance(product.get("tags"), list) else product.get("tags", ""),
-            "variants": variants,
-            "images": images,
-            "published": True
-        }
+        "location_id": location_id,
+        "inventory_item_id": inventory_item_id,
+        "available": quantity
     }
+    inv_url = f"{SHOP_URL}/inventory_levels/set.json"
+    r = requests.post(inv_url, headers=shopify_headers, json=payload)
+    if r.status_code != 200:
+        print("Inventory update failed:", r.text)
 
-    # Update existing product if SKU exists, else create new
-    supplier_sku = variants[0].get("sku")
-    if supplier_sku in sku_to_product_id:
-        product_id = sku_to_product_id[supplier_sku]
-        update_url = f"https://cgdboutique.myshopify.com/admin/api/2023-10/products/{product_id}.json"
-        response = requests.put(update_url, headers=shopify_headers, json=payload)
-        print(f"Updated SKU {supplier_sku}: {response.status_code}")
-    else:
-        response = requests.post(SHOP_URL, headers=shopify_headers, json=payload)
-        print(f"Created SKU {supplier_sku}: {response.status_code}")
+
+def get_location_id():
+    """Fetch the location ID of your Shopify store."""
+    url = f"{SHOP_URL}/locations.json"
+    resp = requests.get(url, headers=shopify_headers)
+    if resp.status_code == 200:
+        locations = resp.json().get("locations", [])
+        if locations:
+            return locations[0]["id"]
+    return None
+
+
+def main():
+    # Fetch supplier products
+    supplier_response = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
+    if supplier_response.status_code != 200:
+        print("Supplier API request failed:", supplier_response.text)
+        return
+
+    supplier_products = supplier_response.json().get("products", [])
+    existing_skus = get_existing_skus()
+    location_id = get_location_id()
+
+    for product in supplier_products:
+        title = clean_text(product.get("body_html", ""))  # Swap: supplier body_html → our title
+        body_html = clean_text(product.get("title", ""))  # Swap: supplier title → our body_html
+
+        variants = []
+        for variant in product.get("variants", []):
+            sku = variant.get("sku", "")
+            if not sku:
+                continue
+            if sku in existing_skus:
+                print(f"Skipping duplicate SKU: {sku}")
+                continue
+
+            variants.append({
+                "option1": variant.get("option1", ""),
+                "sku": sku,
+                "inventory_quantity": variant.get("inventory_quantity", 0),
+                "price": variant.get("price", "0.00"),
+                "inventory_management": "shopify"  # Ensure inventory is tracked
+            })
+
+        if not variants:
+            continue
+
+        images = [{"src": img["src"]} for img in product.get("images", [])] if product.get("images") else []
+
+        payload = {
+            "product": {
+                "title": title or "No Title",
+                "body_html": body_html,
+                "vendor": "",  # remove vendor
+                "product_type": product.get("product_type", ""),
+                "tags": product.get("tags", ""),
+                "variants": variants,
+                "images": images,
+                "published": True
+            }
+        }
+
+        response = requests.post(f"{SHOP_URL}/products.json", headers=shopify_headers, json=payload)
+        if response.status_code == 201:
+            new_product = response.json().get("product", {})
+            print(f"Created product: {new_product.get('title')}")
+
+            # Update inventory for each variant
+            if location_id:
+                for variant in new_product.get("variants", []):
+                    update_inventory(
+                        variant["inventory_item_id"],
+                        location_id,
+                        variant.get("inventory_quantity", 0)
+                    )
+        else:
+            print("Failed to create product:", response.text)
+
+
+if __name__ == "__main__":
+    main()
+
