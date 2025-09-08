@@ -36,19 +36,21 @@ def clean_text(text):
     text = re.sub(r"data-mce-fragment=\"1\"", "", text)
     return text.strip()
 
-def find_products_by_sku(sku):
-    """Find all products in Shopify store with the same SKU"""
-    search_url = "https://cgdboutique.myshopify.com/admin/api/2023-10/products.json"
-    response = requests.get(search_url, headers=shopify_headers, params={"sku": sku})
+def get_product_by_sku(sku):
+    """Check if a product variant with this SKU already exists in Shopify"""
+    url = f"https://cgdboutique.myshopify.com/admin/api/2023-10/variants.json"
+    response = requests.get(url, headers=shopify_headers, params={"sku": sku})
     if response.status_code == 200:
-        return response.json().get("products", [])
-    return []
+        variants = response.json().get("variants", [])
+        if variants:
+            return variants[0]  # return first match
+    return None
 
 def delete_product(product_id):
     """Delete a product from Shopify"""
-    delete_url = f"https://cgdboutique.myshopify.com/admin/api/2023-10/products/{product_id}.json"
-    response = requests.delete(delete_url, headers=shopify_headers)
-    print("Deleted duplicate product:", product_id, response.status_code)
+    url = f"https://cgdboutique.myshopify.com/admin/api/2023-10/products/{product_id}.json"
+    response = requests.delete(url, headers=shopify_headers)
+    print("Deleted duplicate:", product_id, response.status_code)
 
 for product in supplier_products:
     for variant in product.get("variants", []):
@@ -56,20 +58,7 @@ for product in supplier_products:
         if not sku:
             continue  # skip if SKU missing
 
-        # 🔹 Get all products with this SKU
-        existing_products = find_products_by_sku(sku)
-
-        if existing_products:
-            # Keep the most recent one (highest product_id)
-            existing_products.sort(key=lambda p: p["id"], reverse=True)
-            main_product = existing_products[0]
-            duplicates = existing_products[1:]
-
-            # Delete all duplicates
-            for dup in duplicates:
-                delete_product(dup["id"])
-        else:
-            main_product = None
+        existing_variant = get_product_by_sku(sku)
 
         # Build cleaned data
         variants = [{
@@ -99,9 +88,9 @@ for product in supplier_products:
             }
         }
 
-        if main_product:
-            # 🔹 Update main product
-            product_id = main_product["id"]
+        if existing_variant:
+            # 🔹 Update existing product
+            product_id = existing_variant["product_id"]
             update_url = f"https://cgdboutique.myshopify.com/admin/api/2023-10/products/{product_id}.json"
             response = requests.put(update_url, headers=shopify_headers, json=payload)
             print("Updated:", sku, response.status_code)
@@ -111,11 +100,18 @@ for product in supplier_products:
             print("Created:", sku, response.status_code)
 
         # 🔹 Sync inventory
-        inventory_url = "https://cgdboutique.myshopify.com/admin/api/2023-10/inventory_levels/set.json"
-        inventory_payload = {
-            "location_id": LOCATION_ID,
-            "inventory_item_id": variant.get("inventory_item_id"),
-            "available": variant.get("inventory_quantity", 0)
-        }
-        inv_response = requests.post(inventory_url, headers=shopify_headers, json=inventory_payload)
-        print("Inventory Sync:", sku, inv_response.status_code)
+        if existing_variant:
+            inventory_item_id = existing_variant["inventory_item_id"]
+        else:
+            created_product = response.json().get("product", {})
+            inventory_item_id = created_product.get("variants", [{}])[0].get("inventory_item_id")
+
+        if inventory_item_id:
+            inventory_url = "https://cgdboutique.myshopify.com/admin/api/2023-10/inventory_levels/set.json"
+            inventory_payload = {
+                "location_id": LOCATION_ID,
+                "inventory_item_id": inventory_item_id,
+                "available": variant.get("inventory_quantity", 0)
+            }
+            inv_response = requests.post(inventory_url, headers=shopify_headers, json=inventory_payload)
+            print("Inventory Sync:", sku, inv_response.status_code)
