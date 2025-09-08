@@ -1,11 +1,10 @@
 import requests
+import os
 import re
 
-# -------------------------------
-# 🔹 Hardcoded tokens for testing
-# -------------------------------
-SUPPLIER_TOKEN = "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"
-SHOPIFY_TOKEN = "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"
+# 🔹 Fetch tokens from GitHub Secrets
+SUPPLIER_TOKEN = os.getenv("SUPPLIER_TOKEN")
+SHOPIFY_TOKEN = os.getenv("SHOPIFY_TOKEN")
 
 # Supplier API
 SUPPLIER_API_URL = "https://the-brave-ones-childrens-fashion.myshopify.com/admin/api/2023-10/products.json"
@@ -21,9 +20,6 @@ shopify_headers = {
 # 🔹 Replace with your Shopify Location ID
 LOCATION_ID = 79714615616
 
-# -------------------------------
-# Helper to clean text
-# -------------------------------
 def clean_text(text):
     if not text:
         return ""
@@ -33,9 +29,7 @@ def clean_text(text):
     text = re.sub(r"data-mce-fragment=\"1\"", "", text)
     return text.strip()
 
-# -------------------------------
 # Fetch supplier products
-# -------------------------------
 supplier_response = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
 if supplier_response.status_code != 200:
     print("Supplier API request failed:", supplier_response.text)
@@ -43,11 +37,8 @@ if supplier_response.status_code != 200:
 
 supplier_products = supplier_response.json().get("products", [])
 
-# -------------------------------
-# Sync products to Shopify
-# -------------------------------
+# Sync to Shopify
 for product in supplier_products:
-    # Prepare variants
     variants = []
     for variant in product.get("variants", []):
         variants.append({
@@ -59,7 +50,6 @@ for product in supplier_products:
             "inventory_policy": "deny"
         })
 
-    # Images
     images = [{"src": img["src"]} for img in product.get("images", [])] if product.get("images") else []
 
     # Swap title and body_html
@@ -70,7 +60,7 @@ for product in supplier_products:
         "product": {
             "title": title,
             "body_html": body_html,
-            "vendor": "",  # remove vendor
+            "vendor": "",
             "product_type": product.get("product_type", ""),
             "tags": product.get("tags", ""),
             "variants": variants,
@@ -79,9 +69,7 @@ for product in supplier_products:
         }
     }
 
-    # -------------------------------
-    # Duplicate prevention by SKU
-    # -------------------------------
+    # Check for existing product by SKU
     existing_product = None
     for variant in product.get("variants", []):
         sku = variant.get("sku")
@@ -106,9 +94,7 @@ for product in supplier_products:
         print("Created:", response.status_code)
         shop_product = response.json().get("product", {})
 
-    # -------------------------------
     # Inventory sync
-    # -------------------------------
     for shop_variant, supplier_variant in zip(shop_product.get("variants", []), product.get("variants", [])):
         inventory_url = "https://cgdboutique.myshopify.com/admin/api/2023-10/inventory_levels/set.json"
         inv_payload = {
