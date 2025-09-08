@@ -2,7 +2,9 @@ import requests
 import os
 import re
 
-# 🔹 Fetch tokens from GitHub Secrets
+# -------------------------------
+# 🔹 Tokens via GitHub secrets
+# -------------------------------
 SUPPLIER_TOKEN = os.getenv("SUPPLIER_TOKEN")
 SHOPIFY_TOKEN = os.getenv("SHOPIFY_TOKEN")
 
@@ -20,6 +22,9 @@ shopify_headers = {
 # 🔹 Replace with your Shopify Location ID
 LOCATION_ID = 79714615616
 
+# -------------------------------
+# Clean text from unwanted HTML
+# -------------------------------
 def clean_text(text):
     if not text:
         return ""
@@ -29,7 +34,9 @@ def clean_text(text):
     text = re.sub(r"data-mce-fragment=\"1\"", "", text)
     return text.strip()
 
+# -------------------------------
 # Fetch supplier products
+# -------------------------------
 supplier_response = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
 if supplier_response.status_code != 200:
     print("Supplier API request failed:", supplier_response.text)
@@ -37,7 +44,17 @@ if supplier_response.status_code != 200:
 
 supplier_products = supplier_response.json().get("products", [])
 
-# Sync to Shopify
+# -------------------------------
+# Helper: fetch Shopify products by SKU
+# -------------------------------
+def get_shopify_products_by_sku(sku):
+    search_url = f"https://cgdboutique.myshopify.com/admin/api/2023-10/products.json?sku={sku}"
+    res = requests.get(search_url, headers=shopify_headers)
+    return res.json().get("products", [])
+
+# -------------------------------
+# Sync supplier products
+# -------------------------------
 for product in supplier_products:
     variants = []
     for variant in product.get("variants", []):
@@ -69,32 +86,40 @@ for product in supplier_products:
         }
     }
 
-    # Check for existing product by SKU
-    existing_product = None
+    # -------------------------------
+    # Check for duplicates by SKU
+    # -------------------------------
     for variant in product.get("variants", []):
         sku = variant.get("sku")
-        if sku:
-            search_url = f"https://cgdboutique.myshopify.com/admin/api/2023-10/products.json?sku={sku}"
-            search_res = requests.get(search_url, headers=shopify_headers)
-            results = search_res.json().get("products", [])
-            if results:
-                existing_product = results[0]
-                break
+        if not sku:
+            continue
+        existing_products = get_shopify_products_by_sku(sku)
 
+        # If more than 1 product exists, delete duplicates (keep the first)
+        if len(existing_products) > 1:
+            for dup_product in existing_products[1:]:
+                delete_url = f"https://cgdboutique.myshopify.com/admin/api/2023-10/products/{dup_product['id']}.json"
+                del_res = requests.delete(delete_url, headers=shopify_headers)
+                print(f"Deleted duplicate product ID {dup_product['id']} for SKU {sku}: {del_res.status_code}")
+
+    # -------------------------------
+    # Create or update product
+    # -------------------------------
+    existing_product = get_shopify_products_by_sku(variants[0]["sku"]) if variants else []
     if existing_product:
-        # Update existing
-        product_id = existing_product["id"]
+        product_id = existing_product[0]["id"]
         update_url = f"https://cgdboutique.myshopify.com/admin/api/2023-10/products/{product_id}.json"
         response = requests.put(update_url, headers=shopify_headers, json=payload)
         print("Updated:", response.status_code)
         shop_product = response.json().get("product", {})
     else:
-        # Create new product
         response = requests.post(SHOP_URL, headers=shopify_headers, json=payload)
         print("Created:", response.status_code)
         shop_product = response.json().get("product", {})
 
-    # Inventory sync
+    # -------------------------------
+    # Sync inventory
+    # -------------------------------
     for shop_variant, supplier_variant in zip(shop_product.get("variants", []), product.get("variants", [])):
         inventory_url = "https://cgdboutique.myshopify.com/admin/api/2023-10/inventory_levels/set.json"
         inv_payload = {
