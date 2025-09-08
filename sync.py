@@ -1,13 +1,21 @@
 import requests
 import re
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Supplier API details
 SUPPLIER_API_URL = "https://the-brave-ones-childrens-fashion.myshopify.com/admin/api/2023-10/products.json"
-SUPPLIER_TOKEN = "YOUR_SUPPLIER_TOKEN"
+SUPPLIER_TOKEN = os.environ.get("SUPPLIER_TOKEN")
 
 # Your Shopify API details
 SHOP_URL = "https://cgdboutique.myshopify.com/admin/api/2023-10/products.json"
-SHOPIFY_TOKEN = "YOUR_SHOPIFY_TOKEN"
+SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
+
+# Your store location ID (required for inventory updates)
+SHOP_LOCATION_ID = os.environ.get("SHOP_LOCATION_ID")  # add this to your .env
 
 # Headers
 supplier_headers = {"X-Shopify-Access-Token": SUPPLIER_TOKEN}
@@ -17,7 +25,6 @@ shopify_headers = {"X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "app
 def clean_text(text):
     if not text:
         return ""
-    # Remove <p>, </p>, <span ...>, </span>, and Â
     text = re.sub(r"<\/?p>", "", text)
     text = re.sub(r"<span[^>]*>", "", text)
     text = re.sub(r"<\/span>", "", text)
@@ -49,11 +56,9 @@ for product in supplier_products:
 
     payload = {
         "product": {
-            # Supplier body_html → Shopify title
             "title": clean_text(product.get("body_html", "No Title")),
-            # Supplier title → Shopify description
             "body_html": clean_text(product.get("title", "")),
-            "vendor": "",  # remove vendor
+            "vendor": "",
             "product_type": product.get("product_type", ""),
             "tags": ",".join(product.get("tags", [])) if isinstance(product.get("tags"), list) else product.get("tags", ""),
             "variants": variants,
@@ -70,7 +75,7 @@ for product in supplier_products:
         search_url = f"https://cgdboutique.myshopify.com/admin/api/2023-10/products.json?sku={sku}"
         check = requests.get(search_url, headers=shopify_headers)
         if check.status_code == 200 and check.json().get("products"):
-            existing = check.json()["products"][0]  # found existing product
+            existing = check.json()["products"][0]
             break
 
     if existing:
@@ -93,10 +98,10 @@ for product in supplier_products:
                 inventory_item_id = variant.get("inventory_item_id")
                 available = supplier_variant.get("inventory_quantity", 0)
 
-                if inventory_item_id:
+                if inventory_item_id and SHOP_LOCATION_ID:
                     inv_url = "https://cgdboutique.myshopify.com/admin/api/2023-10/inventory_levels/set.json"
                     inv_payload = {
-                        "location_id": YOUR_LOCATION_ID,  # replace with your store location ID
+                        "location_id": int(SHOP_LOCATION_ID),
                         "inventory_item_id": inventory_item_id,
                         "available": available
                     }
