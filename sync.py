@@ -2,64 +2,79 @@ import requests
 import os
 import re
 
-# -------------------------
-# CONFIGURATION
-# -------------------------
-
+# ---------------- Supplier API ----------------
 SUPPLIER_API_URL = "https://the-brave-ones-childrens-fashion.myshopify.com/admin/api/2023-10/products.json"
-SUPPLIER_TOKEN = os.getenv("SUPPLIER_TOKEN")  # GitHub Secret
+SUPPLIER_TOKEN = os.getenv("SUPPLIER_TOKEN")
 
+supplier_headers = {"X-Shopify-Access-Token": SUPPLIER_TOKEN}
+supplier_response = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
+
+if supplier_response.status_code != 200:
+    print("Supplier API request failed:", supplier_response.text)
+    exit(1)
+
+supplier_products = supplier_response.json().get("products", [])
+
+# ---------------- Shopify API ----------------
 SHOP_URL = "https://cgdboutique.myshopify.com/admin/api/2023-10/products.json"
-SHOPIFY_TOKEN = os.getenv("SHOPIFY_TOKEN")    # GitHub Secret
+SHOPIFY_TOKEN = os.getenv("SHOPIFY_TOKEN")
+shopify_headers = {
+    "X-Shopify-Access-Token": SHOPIFY_TOKEN,
+    "Content-Type": "application/json"
+}
 
-# Your Shopify location ID for inventory updates
-LOCATION_ID = 79714615616  # Replace with your actual location ID
+# ---------------- Location ID for inventory ----------------
+LOCATION_ID = 79714615616  # Replace with your Shopify Location ID
 
-# -------------------------
-# HELPER FUNCTIONS
-# -------------------------
-
+# ---------------- Cleaning Function ----------------
 def clean_text(text):
-    """Remove unwanted HTML tags and characters"""
     if not text:
         return ""
-    text = re.sub(r"</?p>", "", text)
+    text = re.sub(r"<\/?p>", "", text)
     text = re.sub(r"Â", "", text)
-    text = re.sub(r"<span.*?>", "", text)
-    text = re.sub(r"data-mce-fragment=\"1\"", "", text)
+    text = re.sub(r"<\/?span.*?>", "", text)
+    text = re.sub(r'data-mce-fragment="1"', "", text)
     return text.strip()
 
-def get_shopify_products():
-    """Fetch all products from Shopify"""
-    response = requests.get(SHOP_URL, headers={"X-Shopify-Access-Token": SHOPIFY_TOKEN})
-    if response.status_code != 200:
-        print("Error fetching Shopify products:", response.text)
-        return []
-    return response.json().get("products", [])
+# ---------------- Step 1: Fetch existing Shopify products ----------------
+all_products = []
+page_info = None
 
-def find_product_by_sku(products, sku):
-    """Return the first product that matches the SKU"""
-    for product in products:
-        for variant in product.get("variants", []):
-            if variant.get("sku") == sku:
-                return product
-    return None
+while True:
+    params = {"limit": 250}
+    if page_info:
+        params["page_info"] = page_info
+    response = requests.get(SHOP_URL, headers=shopify_headers, params=params)
+    products = response.json().get("products", [])
+    all_products.extend(products)
+    # Pagination
+    if "Link" in response.headers and 'rel="next"' in response.headers["Link"]:
+        page_info = response.headers["Link"].split("page_info=")[1].split(">")[0]
+    else:
+        break
 
-# -------------------------
-# MAIN SYNC LOGIC
-# -------------------------
+# Map SKUs to product IDs
+sku_map = {}
+for product in all_products:
+    for variant in product.get("variants", []):
+        sku = variant.get("sku")
+        if sku:
+            if sku in sku_map:
+                # Mark duplicate for deletion
+                sku_map[sku].append(product["id"])
+            else:
+                sku_map[sku] = [product["id"]]
 
-# Fetch supplier products
-supplier_headers = {"X-Shopify-Access-Token": SUPPLIER_TOKEN}
-supplier_resp = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
-if supplier_resp.status_code != 200:
-    print("Supplier API request failed:", supplier_resp.text)
-    exit(1)
-supplier_products = supplier_resp.json().get("products", [])
+# ---------------- Step 2: Delete duplicates ----------------
+for sku, ids in sku_map.items():
+    if len(ids) > 1:
+        # Keep first, delete the rest
+        for duplicate_id in ids[1:]:
+            del_url = f"https://cgdboutique.myshopify.com/admin/api/2023-10/products/{duplicate_id}.json"
+            del_resp = requests.delete(del_url, headers=shopify_headers)
+            print(f"Deleted duplicate product {duplicate_id} for SKU {sku}: {del_resp.status_code}")
 
-# Fetch current Shopify products
-shopify_products = get_shopify_products()
-
+# ---------------- Step 3: Sync Supplier Products ----------------
 for product in supplier_products:
     variants = []
     for variant in product.get("variants", []):
@@ -74,7 +89,7 @@ for product in supplier_products:
 
     images = [{"src": img["src"]} for img in product.get("images", [])] if product.get("images") else []
 
-    # Swap title/body_html
+    # Swap supplier title/body
     title = clean_text(product.get("body_html", "No Title"))
     body_html = clean_text(product.get("title", ""))
 
@@ -82,7 +97,7 @@ for product in supplier_products:
         "product": {
             "title": title,
             "body_html": body_html,
-            "vendor": "",  # Remove vendor
+            "vendor": "",  # remove vendor
             "product_type": product.get("product_type", ""),
             "tags": product.get("tags", ""),
             "variants": variants,
@@ -91,45 +106,41 @@ for product in supplier_products:
         }
     }
 
-    # Check if product exists (by SKU)
+    # Check if SKU exists
     existing_product = None
-    for variant in product.get("variants", []):
-        sku = variant.get("sku")
-        existing_product = find_product_by_sku(shopify_products, sku)
+    for sku, ids in sku_map.items():
+        for variant in product.get("variants", []):
+            if variant.get("sku") == sku:
+                existing_product = ids[0]
+                break
         if existing_product:
             break
 
     if existing_product:
         # Update existing product
-        product_id = existing_product["id"]
-        update_url = f"https://cgdboutique.myshopify.com/admin/api/2023-10/products/{product_id}.json"
-        resp = requests.put(update_url, headers={"X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json"}, json=payload)
-        print(f"Updated: {title} -> Status {resp.status_code}")
+        update_url = f"https://cgdboutique.myshopify.com/admin/api/2023-10/products/{existing_product}.json"
+        response = requests.put(update_url, headers=shopify_headers, json=payload)
+        print(f"Updated product {existing_product}: {response.status_code}")
     else:
         # Create new product
-        resp = requests.post(SHOP_URL, headers={"X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json"}, json=payload)
-        print(f"Created: {title} -> Status {resp.status_code}")
+        response = requests.post(SHOP_URL, headers=shopify_headers, json=payload)
+        created_product = response.json().get("product", {})
+        print(f"Created product {created_product.get('id', 'Unknown')}: {response.status_code}")
 
-    # Sync inventory
+    # ---------------- Step 4: Sync Inventory ----------------
     for variant in product.get("variants", []):
-        sku = variant.get("sku")
-        inventory_qty = variant.get("inventory_quantity", 0)
-        existing_variant = None
-        if existing_product:
-            for v in existing_product.get("variants", []):
-                if v.get("sku") == sku:
-                    existing_variant = v
-                    break
-        else:
-            created_variant = resp.json().get("product", {}).get("variants", [{}])[0]
-            existing_variant = created_variant
+        inventory_item_id = variant.get("inventory_item_id")
+        if not inventory_item_id and created_product:
+            # Fetch variant ID from Shopify if new product
+            created_variant = created_product.get("variants", [{}])[0]
+            inventory_item_id = created_variant.get("inventory_item_id")
 
-        if existing_variant:
+        if inventory_item_id:
+            inventory_url = "https://cgdboutique.myshopify.com/admin/api/2023-10/inventory_levels/set.json"
             inventory_payload = {
                 "location_id": LOCATION_ID,
-                "inventory_item_id": existing_variant.get("inventory_item_id"),
-                "available": inventory_qty
+                "inventory_item_id": inventory_item_id,
+                "available": variant.get("inventory_quantity", 0)
             }
-            inv_url = "https://cgdboutique.myshopify.com/admin/api/2023-10/inventory_levels/set.json"
-            inv_resp = requests.post(inv_url, headers={"X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json"}, json=inventory_payload)
-            print(f"Inventory Sync SKU {sku}: Status {inv_resp.status_code}")
+            inv_response = requests.post(inventory_url, headers=shopify_headers, json=inventory_payload)
+            print(f"Inventory Sync for SKU {variant.get('sku')}: {inv_response.status_code}")
