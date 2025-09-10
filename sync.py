@@ -42,23 +42,24 @@ def clean_text(text):
     text = re.sub(r'data-mce-fragment="1"', "", text)
     return text.strip()
 
-def extract_sku(text):
-    """Extract numeric SKU from supplier title"""
-    if not text:
-        return None
-    match = re.search(r'\b\d+\b', text)
-    return match.group(0) if match else None
-
 # -----------------------------
-# Fetch Shopify products to prevent duplicates
+# Fetch existing Shopify products by SKU
 # -----------------------------
-shopify_resp = requests.get(f"{SHOP_URL}/products.json", headers=shopify_headers)
-shopify_products = shopify_resp.json().get("products", [])
+shopify_products = []
+page = 1
+while True:
+    resp = requests.get(f"{SHOP_URL}/products.json", headers=shopify_headers, params={"limit": 250, "page": page})
+    if resp.status_code != 200:
+        print("Error fetching Shopify products:", resp.text)
+        exit(1)
+    batch = resp.json().get("products", [])
+    if not batch:
+        break
+    shopify_products.extend(batch)
+    page += 1
 
 sku_map = {}
-title_map = {}
 for sp in shopify_products:
-    clean_title = clean_text(sp.get("title", ""))
     for var in sp.get("variants", []):
         sku = var.get("sku")
         if sku:
@@ -67,7 +68,6 @@ for sp in shopify_products:
                 "variant_id": var["id"],
                 "inventory_item_id": var["inventory_item_id"]
             }
-    title_map[clean_title] = sp["id"]
 
 # -----------------------------
 # Fetch Supplier products
@@ -83,7 +83,8 @@ supplier_products = supplier_resp.json().get("products", [])
 # Sync products and inventory
 # -----------------------------
 for product in supplier_products:
-    supplier_sku = extract_sku(product.get("title"))
+    supplier_variant = product.get("variants", [{}])[0]
+    supplier_sku = supplier_variant.get("sku")
     if not supplier_sku:
         continue
 
@@ -93,7 +94,6 @@ for product in supplier_products:
 
     images = [{"src": img["src"]} for img in product.get("images", [])] if product.get("images") else []
 
-    supplier_variant = product.get("variants", [{}])[0]
     variant_payload = [{
         "option1": "Default",
         "sku": supplier_sku,
@@ -116,42 +116,26 @@ for product in supplier_products:
         }
     }
 
-    existing_product_id = None
-    variant_id = None
-    inventory_item_id = None
-
-    # Check by SKU first
     if supplier_sku in sku_map:
-        existing_product_id = sku_map[supplier_sku]["product_id"]
-        variant_id = sku_map[supplier_sku]["variant_id"]
-        inventory_item_id = sku_map[supplier_sku]["inventory_item_id"]
+        # Update existing product
+        existing = sku_map[supplier_sku]
+        product_id = existing["product_id"]
+        variant_id = existing["variant_id"]
+        inventory_item_id = existing["inventory_item_id"]
 
-    # Fallback: check by cleaned title
-    elif title in title_map:
-        existing_product_id = title_map[title]
-        # Fetch variant_id & inventory_item_id
-        prod_resp = requests.get(f"{SHOP_URL}/products/{existing_product_id}.json", headers=shopify_headers)
-        prod_data = prod_resp.json().get("product", {})
-        if prod_data.get("variants"):
-            variant_id = prod_data["variants"][0]["id"]
-            inventory_item_id = prod_data["variants"][0]["inventory_item_id"]
-
-    if existing_product_id:
-        # Update product
-        resp = requests.put(f"{SHOP_URL}/products/{existing_product_id}.json", headers=shopify_headers, json=payload)
+        resp = requests.put(f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=payload)
         print(f"Updated product {supplier_sku}: {resp.status_code}")
 
         # Update inventory
-        if inventory_item_id:
-            inv_payload = {
-                "location_id": LOCATION_ID,
-                "inventory_item_id": inventory_item_id,
-                "available": supplier_variant.get("inventory_quantity", 0)
-            }
-            inv_resp = requests.post(f"{SHOP_URL}/inventory_levels/set.json", headers=shopify_headers, json=inv_payload)
-            print(f"Updated inventory {supplier_sku}: {inv_resp.status_code}")
+        inv_payload = {
+            "location_id": LOCATION_ID,
+            "inventory_item_id": inventory_item_id,
+            "available": supplier_variant.get("inventory_quantity", 0)
+        }
+        inv_resp = requests.post(f"{SHOP_URL}/inventory_levels/set.json", headers=shopify_headers, json=inv_payload)
+        print(f"Inventory synced {supplier_sku}: {inv_resp.status_code}")
 
     else:
-        # Create product
+        # Create new product
         resp = requests.post(f"{SHOP_URL}/products.json", headers=shopify_headers, json=payload)
         print(f"Created product {supplier_sku}: {resp.status_code}")
