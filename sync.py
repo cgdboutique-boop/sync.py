@@ -1,6 +1,7 @@
 import os
 import requests
 import time
+import csv
 
 # -------------------------------
 # CONFIG
@@ -18,6 +19,16 @@ supplier_headers = {
     "X-Shopify-Access-Token": SUPPLIER_TOKEN,
     "Content-Type": "application/json"
 }
+
+LOG_FILE = "sync_log.csv"
+
+# -------------------------------
+# LOGGING FUNCTION
+# -------------------------------
+def log_action(action, sku, variant_id, inventory_item_id=None, old_value=None, new_value=None):
+    with open(LOG_FILE, mode="a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([time.strftime("%Y-%m-%d %H:%M:%S"), action, sku, variant_id, inventory_item_id, old_value, new_value])
 
 # -------------------------------
 # HELPER FUNCTIONS
@@ -54,24 +65,26 @@ def fetch_all_shopify_variants():
 
     return variants_by_sku
 
-def update_variant_price(variant_id, price):
+def update_variant_price(variant_id, sku, price):
     payload = {"variant": {"id": variant_id, "price": price}}
     r = requests.put(f"{SHOP_URL}/variants/{variant_id}.json", headers=shopify_headers, json=payload)
     r.raise_for_status()
-    print(f"Updated price for variant {variant_id} to {price}")
+    print(f"Updated price for variant {variant_id} (SKU {sku}) to {price}")
+    log_action("Price Update", sku, variant_id, new_value=price)
 
-def update_inventory(inventory_item_id, location_id, target_quantity):
+def update_inventory(inventory_item_id, location_id, target_quantity, sku):
     # Get current quantity
     url = f"{SHOP_URL}/inventory_levels.json?inventory_item_ids={inventory_item_id}&location_ids={location_id}"
     r = requests.get(url, headers=shopify_headers)
     r.raise_for_status()
     levels = r.json().get("inventory_levels", [])
     
-    current_quantity = levels[0]["available"] if levels else 0
+    # Ensure current_quantity is always integer
+    current_quantity = levels[0]["available"] if levels and levels[0]["available"] is not None else 0
     adjustment = target_quantity - current_quantity
 
     if adjustment == 0:
-        print(f"Inventory for item {inventory_item_id} is already correct ({current_quantity})")
+        print(f"Inventory for item {inventory_item_id} (SKU {sku}) is already correct ({current_quantity})")
         return
 
     payload = {
@@ -82,7 +95,8 @@ def update_inventory(inventory_item_id, location_id, target_quantity):
 
     r_adjust = requests.post(f"{SHOP_URL}/inventory_levels/adjust.json", headers=shopify_headers, json=payload)
     r_adjust.raise_for_status()
-    print(f"Adjusted inventory for item {inventory_item_id} by {adjustment} to reach {target_quantity}")
+    print(f"Adjusted inventory for item {inventory_item_id} (SKU {sku}) by {adjustment} to reach {target_quantity}")
+    log_action("Inventory Adjust", sku, None, inventory_item_id, old_value=current_quantity, new_value=target_quantity)
     time.sleep(0.5)
 
 def create_product(product):
@@ -112,12 +126,21 @@ def create_product(product):
     r = requests.post(f"{SHOP_URL}/products.json", headers=shopify_headers, json=payload)
     r.raise_for_status()
     print(f"Created new product: {product.get('title')}")
-    time.sleep(0.5)  # pause to avoid hitting rate limits
+    # Log creation
+    for variant in product.get("variants", []):
+        log_action("Product Created", variant.get("sku"), None, None, new_value=variant.get("inventory_quantity", 0))
+    time.sleep(0.5)
 
 # -------------------------------
 # MAIN SYNC
 # -------------------------------
 def main():
+    # Create CSV header
+    if not os.path.exists(LOG_FILE):
+        with open(LOG_FILE, mode="w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Timestamp", "Action", "SKU", "Variant ID", "Inventory Item ID", "Old Value", "New Value"])
+
     location_id = get_shopify_locations()
     updated_inventory_items = set()
 
@@ -141,18 +164,18 @@ def main():
             existing_variant = shopify_variants.get(sku)
             if existing_variant:
                 # Update price
-                update_variant_price(existing_variant["id"], variant.get("price", "0.00"))
+                update_variant_price(existing_variant["id"], sku, variant.get("price", "0.00"))
                 # Update inventory once per inventory_item_id
                 inventory_id = existing_variant["inventory_item_id"]
                 if inventory_id not in updated_inventory_items:
-                    update_inventory(inventory_id, location_id, variant.get("inventory_quantity", 0))
+                    update_inventory(inventory_id, location_id, variant.get("inventory_quantity", 0), sku)
                     updated_inventory_items.add(inventory_id)
                 else:
                     print(f"Skipping duplicate inventory update for item {inventory_id}")
             else:
                 create_product(product)
 
-    print("\n✅ Full sync completed without API errors.")
+    print("\n✅ Full sync completed. Check sync_log.csv for details.")
 
 if __name__ == "__main__":
     main()
