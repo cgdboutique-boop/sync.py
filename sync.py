@@ -15,7 +15,7 @@ shopify_headers = {"X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "app
 supplier_headers = {"X-Shopify-Access-Token": SUPPLIER_TOKEN}
 
 # -----------------------------
-# Auto-fetch Location ID
+# Fetch Location ID
 # -----------------------------
 location_resp = requests.get(f"{SHOP_URL}/locations.json", headers=shopify_headers)
 if location_resp.status_code != 200:
@@ -31,7 +31,7 @@ LOCATION_ID = locations[0]["id"]
 print(f"Using Location ID: {LOCATION_ID} ({locations[0]['name']})")
 
 # -----------------------------
-# Helper Functions
+# Helper Function
 # -----------------------------
 def clean_text(text):
     if not text:
@@ -43,7 +43,7 @@ def clean_text(text):
     return text.strip()
 
 # -----------------------------
-# Fetch existing Shopify products by SKU
+# Build Shopify SKU map
 # -----------------------------
 shopify_products = []
 page = 1
@@ -70,7 +70,7 @@ for sp in shopify_products:
             }
 
 # -----------------------------
-# Fetch Supplier products
+# Fetch Supplier Products
 # -----------------------------
 supplier_resp = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
 if supplier_resp.status_code != 200:
@@ -80,7 +80,7 @@ if supplier_resp.status_code != 200:
 supplier_products = supplier_resp.json().get("products", [])
 
 # -----------------------------
-# Sync products and inventory
+# Sync Products
 # -----------------------------
 for product in supplier_products:
     supplier_variant = product.get("variants", [{}])[0]
@@ -88,7 +88,7 @@ for product in supplier_products:
     if not supplier_sku:
         continue
 
-    # Swap title and body_html
+    # Swap title/body_html
     title = clean_text(product.get("body_html", "No Title"))
     body_html = clean_text(product.get("title", ""))
 
