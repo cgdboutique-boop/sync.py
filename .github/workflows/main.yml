@@ -1,16 +1,28 @@
+name: Sync Supplier to Shopify
+
+on:
+  schedule:
+    - cron: "0 * * * *"   # Runs every hour
+  workflow_dispatch:      # Allow manual trigger
+
 jobs:
-  sync:
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v3
-      - name: Setup Python
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.13'
-      - name: Install requests
+          python-version: "3.x"
+
+      - name: Install dependencies
         run: pip install requests
-      - name: Run Shopify Sync
-        run: python sync.py
+
+      - name: Run sync script
         env:
           SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
           SHOPIFY_TOKEN: ${{ secrets.SHOPIFY_TOKEN }}
+        run: python sync.py
