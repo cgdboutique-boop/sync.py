@@ -78,9 +78,20 @@ def update_inventory(inventory_item_id, location_id, target_quantity, sku):
     r = requests.get(url, headers=shopify_headers)
     r.raise_for_status()
     levels = r.json().get("inventory_levels", [])
-    
-    # Ensure current_quantity is always integer
-    current_quantity = levels[0]["available"] if levels and levels[0]["available"] is not None else 0
+
+    if not levels:
+        # Inventory item not linked to location — link it first
+        connect_payload = {
+            "location_id": location_id,
+            "inventory_item_id": inventory_item_id,
+            "available": 0
+        }
+        r_connect = requests.post(f"{SHOP_URL}/inventory_levels/connect.json", headers=shopify_headers, json=connect_payload)
+        r_connect.raise_for_status()
+        print(f"Connected inventory item {inventory_item_id} (SKU {sku}) to location")
+        levels = [{"available": 0}]  # set current_quantity to 0 after connect
+
+    current_quantity = levels[0]["available"] if levels[0]["available"] is not None else 0
     adjustment = target_quantity - current_quantity
 
     if adjustment == 0:
