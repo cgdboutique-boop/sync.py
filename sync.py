@@ -17,9 +17,10 @@ supplier_headers = {"X-Shopify-Access-Token": SUPPLIER_TOKEN}
 shopify_headers = {"X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json"}
 
 # -----------------------------
-# Helper Functions
+# Helper functions
 # -----------------------------
 def clean_text(text):
+    """Remove unwanted HTML tags/characters."""
     if not text:
         return ""
     text = re.sub(r"<\/?p>", "", text)
@@ -29,7 +30,7 @@ def clean_text(text):
     return text.strip()
 
 def extract_sku(text):
-    """Extract SKU from text, assumes SKU is numeric in supplier title"""
+    """Extract SKU from supplier title."""
     if not text:
         return None
     match = re.search(r'\b\d+\b', text)
@@ -42,6 +43,7 @@ supplier_resp = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
 if supplier_resp.status_code != 200:
     print("Supplier API request failed:", supplier_resp.text)
     exit(1)
+
 supplier_products = supplier_resp.json().get("products", [])
 
 # -----------------------------
@@ -51,9 +53,10 @@ shopify_resp = requests.get(f"{SHOP_URL}/products.json", headers=shopify_headers
 if shopify_resp.status_code != 200:
     print("Shopify API request failed:", shopify_resp.text)
     exit(1)
+
 shopify_products = shopify_resp.json().get("products", [])
 
-# Build SKU → product mapping
+# Build a mapping: SKU → existing product
 shopify_sku_map = {}
 for sp in shopify_products:
     sku_in_body = extract_sku(sp.get("body_html", ""))
@@ -61,18 +64,20 @@ for sp in shopify_products:
         shopify_sku_map[sku_in_body] = sp
 
 # -----------------------------
-# Sync supplier products
+# Sync products
 # -----------------------------
 for product in supplier_products:
     supplier_sku = extract_sku(product.get("title", ""))
     if not supplier_sku:
-        continue  # Skip if no SKU
+        continue
 
     supplier_qty = product["variants"][0].get("inventory_quantity", 0)
     supplier_price = product["variants"][0].get("price", "0.00")
 
-    title = clean_text(product.get("body_html", "No Title"))   # Swapped
-    body_html = clean_text(product.get("title", ""))            # Swapped
+    # Swap title and body_html
+    title = clean_text(product.get("body_html", "No Title"))
+    body_html = clean_text(product.get("title", ""))
+
     images = [{"src": img["src"]} for img in product.get("images", [])] if product.get("images") else []
 
     variant_payload = [{
@@ -87,7 +92,7 @@ for product in supplier_products:
         "product": {
             "title": title,
             "body_html": body_html,
-            "vendor": "",  # Remove vendor
+            "vendor": "",  # remove vendor
             "product_type": product.get("product_type", ""),
             "tags": product.get("tags", ""),
             "variants": variant_payload,
