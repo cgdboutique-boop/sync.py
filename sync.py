@@ -1,51 +1,68 @@
 import requests
 import os
 
-# Supplier API details
+# 🔹 Supplier API
 SUPPLIER_API_URL = "https://the-brave-ones-childrens-fashion.myshopify.com/admin/api/2023-10/products.json"
 SUPPLIER_TOKEN = os.getenv("SUPPLIER_TOKEN")
 
-supplier_headers = {"X-Shopify-Access-Token": SUPPLIER_TOKEN}
-supplier_response = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
+# 🔹 Your Shopify store API
+SHOPIFY_API_URL = "https://cgdboutique.myshopify.com/admin/api/2023-10"
+SHOPIFY_TOKEN = os.getenv("SHOPIFY_TOKEN")
 
+supplier_headers = {"X-Shopify-Access-Token": SUPPLIER_TOKEN}
+shopify_headers = {"X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json"}
+
+# 🔹 Fetch supplier products
+supplier_response = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
 if supplier_response.status_code != 200:
-    print("Supplier API request failed:", supplier_response.text)
+    print("❌ Supplier API request failed:", supplier_response.text)
     exit(1)
 
 supplier_products = supplier_response.json().get("products", [])
 
-# Shopify API details
-SHOP_URL = "https://cgdboutique.myshopify.com/admin/api/2023-10/products.json"
-SHOPIFY_TOKEN = os.getenv("SHOPIFY_TOKEN")
-shopify_headers = {
-    "X-Shopify-Access-Token": SHOPIFY_TOKEN,
-    "Content-Type": "application/json"
-}
-
+# 🔹 Loop through supplier products
 for product in supplier_products:
-    variants = []
     for variant in product.get("variants", []):
-        variants.append({
-            "option1": variant.get("option1", ""),
-            "sku": variant.get("sku", ""),
-            "inventory_quantity": variant.get("inventory_quantity", 0),
-            "price": variant.get("price", "0.00")
-        })
+        sku = variant.get("sku")
+        if not sku:
+            continue  # skip if no SKU
 
-    images = [{"src": img["src"]} for img in product.get("images", [])] if product.get("images") else []
+        # Check if Shopify product exists with this SKU
+        search_url = f"{SHOPIFY_API_URL}/products.json?sku={sku}"
+        search_response = requests.get(search_url, headers=shopify_headers)
 
-    payload = {
-        "product": {
-            "title": product.get("title", "No Title"),
-            "body_html": product.get("body_html", ""),
-            "vendor": product.get("vendor", ""),
-            "product_type": product.get("product_type", ""),
-            "tags": product.get("tags", ""),
-            "variants": variants,
-            "images": images,
-            "published": True
+        if search_response.status_code != 200:
+            print(f"❌ Failed to search for SKU {sku}:", search_response.text)
+            continue
+
+        shopify_products = search_response.json().get("products", [])
+        if not shopify_products:
+            print(f"⚠️ No match found in Shopify for SKU {sku}, skipping.")
+            continue
+
+        shopify_product = shopify_products[0]  # Take first match
+        product_id = shopify_product["id"]
+
+        # Update product payload
+        payload = {
+            "product": {
+                "id": product_id,
+                "title": product.get("title", shopify_product["title"]),
+                "body_html": product.get("body_html", shopify_product["body_html"]),
+                "variants": [
+                    {
+                        "id": shopify_product["variants"][0]["id"],
+                        "price": variant.get("price", shopify_product["variants"][0]["price"]),
+                        "inventory_quantity": variant.get("inventory_quantity", 0)
+                    }
+                ]
+            }
         }
-    }
 
-    response = requests.post(SHOP_URL, headers=shopify_headers, json=payload)
-    print(response.status_code, response.json())
+        update_url = f"{SHOPIFY_API_URL}/products/{product_id}.json"
+        update_response = requests.put(update_url, headers=shopify_headers, json=payload)
+
+        if update_response.status_code == 200:
+            print(f"✅ Updated SKU {sku}")
+        else:
+            print(f"❌ Failed to update SKU {sku}:", update_response.text)
