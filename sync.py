@@ -31,22 +31,27 @@ def get_shopify_locations():
     return locations[0]["id"]
 
 def fetch_all_shopify_variants():
-    """Fetch all products and variants once and store in dict by SKU"""
+    """Fetch all Shopify products and variants once using since_id pagination"""
     variants_by_sku = {}
-    page = 1
+    since_id = 0
+
     while True:
-        r = requests.get(f"{SHOP_URL}/products.json?limit=250&page={page}", headers=shopify_headers)
+        url = f"{SHOP_URL}/products.json?limit=250&since_id={since_id}"
+        r = requests.get(url, headers=shopify_headers)
         r.raise_for_status()
         products = r.json().get("products", [])
         if not products:
             break
+
         for product in products:
             for variant in product.get("variants", []):
                 sku = variant.get("sku")
                 if sku:
                     variants_by_sku[sku] = variant
-        page += 1
-        time.sleep(0.5)  # small pause to avoid rate limit
+
+        since_id = products[-1]["id"]
+        time.sleep(0.5)  # pause to avoid rate limits
+
     return variants_by_sku
 
 def update_variant_price(variant_id, price):
@@ -92,7 +97,7 @@ def create_product(product):
     r = requests.post(f"{SHOP_URL}/products.json", headers=shopify_headers, json=payload)
     r.raise_for_status()
     print(f"Created new product: {product.get('title')}")
-    time.sleep(0.5)  # pause to avoid hitting rate limit
+    time.sleep(0.5)  # pause to avoid hitting rate limits
 
 # -------------------------------
 # MAIN SYNC
