@@ -60,33 +60,30 @@ def update_variant_price(variant_id, price):
     r.raise_for_status()
     print(f"Updated price for variant {variant_id} to {price}")
 
-def update_inventory(inventory_item_id, location_id, quantity):
+def update_inventory(inventory_item_id, location_id, target_quantity):
+    # Get current quantity
+    url = f"{SHOP_URL}/inventory_levels.json?inventory_item_ids={inventory_item_id}&location_ids={location_id}"
+    r = requests.get(url, headers=shopify_headers)
+    r.raise_for_status()
+    levels = r.json().get("inventory_levels", [])
+    
+    current_quantity = levels[0]["available"] if levels else 0
+    adjustment = target_quantity - current_quantity
+
+    if adjustment == 0:
+        print(f"Inventory for item {inventory_item_id} is already correct ({current_quantity})")
+        return
+
     payload = {
         "location_id": location_id,
         "inventory_item_id": inventory_item_id,
-        "available": quantity
+        "available_adjustment": adjustment
     }
-    try:
-        r = requests.post(f"{SHOP_URL}/inventory_levels/set.json", headers=shopify_headers, json=payload)
-        r.raise_for_status()
-        print(f"Updated inventory for item {inventory_item_id} to {quantity}")
-    except requests.exceptions.HTTPError as e:
-        if r.status_code == 422:
-            print(f"Inventory level does not exist for item {inventory_item_id}. Connecting to location...")
-            connect_payload = {
-                "location_id": location_id,
-                "inventory_item_id": inventory_item_id,
-                "relocate_if_necessary": True
-            }
-            r_connect = requests.post(f"{SHOP_URL}/inventory_levels/connect.json", headers=shopify_headers, json=connect_payload)
-            r_connect.raise_for_status()
-            print(f"Connected inventory item {inventory_item_id} to location. Setting quantity now...")
-            time.sleep(0.5)
-            r_set = requests.post(f"{SHOP_URL}/inventory_levels/set.json", headers=shopify_headers, json=payload)
-            r_set.raise_for_status()
-            print(f"Updated inventory for item {inventory_item_id} to {quantity}")
-        else:
-            raise e
+
+    r_adjust = requests.post(f"{SHOP_URL}/inventory_levels/adjust.json", headers=shopify_headers, json=payload)
+    r_adjust.raise_for_status()
+    print(f"Adjusted inventory for item {inventory_item_id} by {adjustment} to reach {target_quantity}")
+    time.sleep(0.5)
 
 def create_product(product):
     variants = []
@@ -150,7 +147,6 @@ def main():
                 if inventory_id not in updated_inventory_items:
                     update_inventory(inventory_id, location_id, variant.get("inventory_quantity", 0))
                     updated_inventory_items.add(inventory_id)
-                    time.sleep(0.5)
                 else:
                     print(f"Skipping duplicate inventory update for item {inventory_id}")
             else:
