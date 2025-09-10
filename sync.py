@@ -11,8 +11,7 @@ SUPPLIER_TOKEN = os.getenv("SUPPLIER_TOKEN")
 SHOP_URL = "https://cgdboutique.myshopify.com/admin/api/2023-10"
 SHOPIFY_TOKEN = os.getenv("SHOPIFY_TOKEN")
 
-# Replace with your Shopify Location ID for inventory updates
-LOCATION_ID = 79714615616  
+LOCATION_ID = 79714615616  # Your Shopify location ID
 
 supplier_headers = {"X-Shopify-Access-Token": SUPPLIER_TOKEN}
 shopify_headers = {"X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json"}
@@ -21,7 +20,6 @@ shopify_headers = {"X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "app
 # Helper Functions
 # -----------------------------
 def clean_text(text):
-    """Remove unwanted HTML tags and characters"""
     if not text:
         return ""
     text = re.sub(r"<\/?p>", "", text)
@@ -31,7 +29,6 @@ def clean_text(text):
     return text.strip()
 
 def extract_sku_from_body(body_html):
-    """Extract SKU from body_html (assuming SKU is numeric)"""
     if not body_html:
         return None
     match = re.search(r'\b\d+\b', body_html)
@@ -44,7 +41,6 @@ supplier_response = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
 if supplier_response.status_code != 200:
     print("Supplier API request failed:", supplier_response.text)
     exit(1)
-
 supplier_products = supplier_response.json().get("products", [])
 
 # -----------------------------
@@ -57,14 +53,29 @@ if shopify_products_response.status_code != 200:
 shopify_products = shopify_products_response.json().get("products", [])
 
 # -----------------------------
-# Sync logic
+# Remove duplicates first
+# -----------------------------
+seen_skus = set()
+for sp in shopify_products:
+    sku_in_body = extract_sku_from_body(sp.get("body_html", ""))
+    if sku_in_body:
+        if sku_in_body in seen_skus:
+            # Delete duplicate product
+            product_id = sp["id"]
+            del_url = f"{SHOP_URL}/products/{product_id}.json"
+            del_response = requests.delete(del_url, headers=shopify_headers)
+            print(f"Deleted duplicate SKU {sku_in_body}: {del_response.status_code}")
+        else:
+            seen_skus.add(sku_in_body)
+
+# -----------------------------
+# Sync supplier products
 # -----------------------------
 for product in supplier_products:
-    supplier_sku = product.get("title", "").strip()  # SKU is in supplier title
+    supplier_sku = product.get("title", "").strip()
     supplier_qty = product["variants"][0].get("inventory_quantity", 0)
     supplier_price = product["variants"][0].get("price", "0.00")
 
-    # Search Shopify for matching SKU in body_html
     matched_product = None
     matched_variant = None
     for sp in shopify_products:
