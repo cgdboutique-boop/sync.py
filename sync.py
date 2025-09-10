@@ -1,5 +1,6 @@
 import os
 import requests
+import json
 
 # -------------------------------
 # CONFIG
@@ -19,45 +20,96 @@ supplier_headers = {
 }
 
 # -------------------------------
-# STEP 1: Test Shopify Products
+# HELPER FUNCTIONS
 # -------------------------------
-print("=== Testing Shopify Store Products ===")
-try:
-    r = requests.get(f"{SHOP_URL}/products.json?limit=1", headers=shopify_headers)
-    r.raise_for_status()
-    products = r.json().get("products", [])
-    print(f"Shopify products fetched: {len(products)}")
-    if products:
-        print("Sample product title:", products[0]["title"])
-except Exception as e:
-    print("Error fetching Shopify products:", e)
-
-# -------------------------------
-# STEP 2: Test Shopify Locations
-# -------------------------------
-print("\n=== Testing Shopify Locations ===")
-try:
+def get_shopify_locations():
     r = requests.get(f"{SHOP_URL}/locations.json", headers=shopify_headers)
     r.raise_for_status()
     locations = r.json().get("locations", [])
-    print(f"Shopify locations fetched: {len(locations)}")
-    if locations:
-        print("Sample location:", locations[0]["name"], "| ID:", locations[0]["id"])
-except Exception as e:
-    print("Error fetching Shopify locations:", e)
+    if not locations:
+        raise Exception("No Shopify locations found. Check API permissions.")
+    return locations[0]["id"]  # use first location
+
+def find_variant_by_sku(sku):
+    r = requests.get(f"{SHOP_URL}/variants.json?sku={sku}", headers=shopify_headers)
+    r.raise_for_status()
+    variants = r.json().get("variants", [])
+    return variants[0] if variants else None
+
+def update_variant_price(variant_id, price):
+    payload = {"variant": {"id": variant_id, "price": price}}
+    r = requests.put(f"{SHOP_URL}/variants/{variant_id}.json", headers=shopify_headers, json=payload)
+    r.raise_for_status()
+    print(f"Updated price for variant {variant_id} to {price}")
+
+def update_inventory(inventory_item_id, location_id, quantity):
+    payload = {
+        "location_id": location_id,
+        "inventory_item_id": inventory_item_id,
+        "available": quantity
+    }
+    r = requests.post(f"{SHOP_URL}/inventory_levels/set.json", headers=shopify_headers, json=payload)
+    r.raise_for_status()
+    print(f"Updated inventory for item {inventory_item_id} to {quantity}")
+
+def create_product(product):
+    variants = []
+    for variant in product.get("variants", []):
+        variants.append({
+            "option1": variant.get("option1", ""),
+            "sku": variant.get("sku", ""),
+            "price": variant.get("price", "0.00"),
+            "inventory_quantity": variant.get("inventory_quantity", 0)
+        })
+
+    images = [{"src": img["src"]} for img in product.get("images", [])] if product.get("images") else []
+
+    payload = {
+        "product": {
+            "title": product.get("title", "No Title"),
+            "body_html": product.get("body_html", ""),
+            "vendor": product.get("vendor", ""),
+            "product_type": product.get("product_type", ""),
+            "tags": ",".join(product.get("tags", [])) if isinstance(product.get("tags"), list) else product.get("tags", ""),
+            "variants": variants,
+            "images": images,
+            "published": True
+        }
+    }
+    r = requests.post(f"{SHOP_URL}/products.json", headers=shopify_headers, json=payload)
+    r.raise_for_status()
+    print(f"Created new product: {product.get('title')}")
 
 # -------------------------------
-# STEP 3: Test Supplier Products
+# MAIN SYNC PROCESS
 # -------------------------------
-print("\n=== Testing Supplier Products ===")
-try:
+def main():
+    location_id = get_shopify_locations()
+
+    # Fetch supplier products
     r = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
     r.raise_for_status()
     supplier_products = r.json().get("products", [])
-    print(f"Supplier products fetched: {len(supplier_products)}")
-    if supplier_products:
-        print("Sample supplier product title:", supplier_products[0]["title"])
-except Exception as e:
-    print("Error fetching supplier products:", e)
+    print(f"Fetched {len(supplier_products)} supplier products")
 
-print("\n✅ All tests completed.")
+    for product in supplier_products:
+        for variant in product.get("variants", []):
+            sku = variant.get("sku")
+            if not sku:
+                print(f"Skipping variant with no SKU in product {product.get('title')}")
+                continue
+
+            existing_variant = find_variant_by_sku(sku)
+            if existing_variant:
+                # Update price
+                update_variant_price(existing_variant["id"], variant.get("price", "0.00"))
+                # Update inventory
+                update_inventory(existing_variant["inventory_item_id"], location_id, variant.get("inventory_quantity", 0))
+            else:
+                # Product doesn’t exist → create new product
+                create_product(product)
+
+    print("\n✅ Sync completed.")
+
+if __name__ == "__main__":
+    main()
