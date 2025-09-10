@@ -1,6 +1,6 @@
 import os
 import requests
-import json
+import time
 
 # -------------------------------
 # CONFIG
@@ -79,12 +79,14 @@ def create_product(product):
     r = requests.post(f"{SHOP_URL}/products.json", headers=shopify_headers, json=payload)
     r.raise_for_status()
     print(f"Created new product: {product.get('title')}")
+    time.sleep(0.5)  # pause to avoid hitting rate limit
 
 # -------------------------------
 # MAIN SYNC PROCESS
 # -------------------------------
 def main():
     location_id = get_shopify_locations()
+    updated_inventory_items = set()  # track inventory items already updated
 
     # Fetch supplier products
     r = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
@@ -103,13 +105,19 @@ def main():
             if existing_variant:
                 # Update price
                 update_variant_price(existing_variant["id"], variant.get("price", "0.00"))
-                # Update inventory
-                update_inventory(existing_variant["inventory_item_id"], location_id, variant.get("inventory_quantity", 0))
+                # Update inventory only once per inventory_item_id
+                inventory_id = existing_variant["inventory_item_id"]
+                if inventory_id not in updated_inventory_items:
+                    update_inventory(inventory_id, location_id, variant.get("inventory_quantity", 0))
+                    updated_inventory_items.add(inventory_id)
+                    time.sleep(0.5)  # small delay to avoid 429
+                else:
+                    print(f"Skipping duplicate inventory update for item {inventory_id}")
             else:
                 # Product doesn’t exist → create new product
                 create_product(product)
 
-    print("\n✅ Sync completed.")
+    print("\n✅ Full sync completed.")
 
 if __name__ == "__main__":
     main()
