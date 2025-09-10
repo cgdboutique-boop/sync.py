@@ -66,9 +66,27 @@ def update_inventory(inventory_item_id, location_id, quantity):
         "inventory_item_id": inventory_item_id,
         "available": quantity
     }
-    r = requests.post(f"{SHOP_URL}/inventory_levels/set.json", headers=shopify_headers, json=payload)
-    r.raise_for_status()
-    print(f"Updated inventory for item {inventory_item_id} to {quantity}")
+    try:
+        r = requests.post(f"{SHOP_URL}/inventory_levels/set.json", headers=shopify_headers, json=payload)
+        r.raise_for_status()
+        print(f"Updated inventory for item {inventory_item_id} to {quantity}")
+    except requests.exceptions.HTTPError as e:
+        if r.status_code == 422:
+            print(f"Inventory level does not exist for item {inventory_item_id}. Connecting to location...")
+            connect_payload = {
+                "location_id": location_id,
+                "inventory_item_id": inventory_item_id,
+                "relocate_if_necessary": True
+            }
+            r_connect = requests.post(f"{SHOP_URL}/inventory_levels/connect.json", headers=shopify_headers, json=connect_payload)
+            r_connect.raise_for_status()
+            print(f"Connected inventory item {inventory_item_id} to location. Setting quantity now...")
+            time.sleep(0.5)
+            r_set = requests.post(f"{SHOP_URL}/inventory_levels/set.json", headers=shopify_headers, json=payload)
+            r_set.raise_for_status()
+            print(f"Updated inventory for item {inventory_item_id} to {quantity}")
+        else:
+            raise e
 
 def create_product(product):
     variants = []
@@ -138,7 +156,7 @@ def main():
             else:
                 create_product(product)
 
-    print("\n✅ Full sync completed without excessive API calls.")
+    print("\n✅ Full sync completed without API errors.")
 
 if __name__ == "__main__":
     main()
