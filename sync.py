@@ -27,7 +27,6 @@ if not locations:
     print("No locations found in Shopify store.")
     exit(1)
 
-# Pick first location automatically
 LOCATION_ID = locations[0]["id"]
 print(f"Using Location ID: {LOCATION_ID} ({locations[0]['name']})")
 
@@ -44,6 +43,7 @@ def clean_text(text):
     return text.strip()
 
 def extract_sku(text):
+    """Extract numeric SKU from supplier title"""
     if not text:
         return None
     match = re.search(r'\b\d+\b', text)
@@ -56,7 +56,9 @@ shopify_resp = requests.get(f"{SHOP_URL}/products.json", headers=shopify_headers
 shopify_products = shopify_resp.json().get("products", [])
 
 sku_map = {}
+title_map = {}
 for sp in shopify_products:
+    clean_title = clean_text(sp.get("title", ""))
     for var in sp.get("variants", []):
         sku = var.get("sku")
         if sku:
@@ -65,6 +67,7 @@ for sp in shopify_products:
                 "variant_id": var["id"],
                 "inventory_item_id": var["inventory_item_id"]
             }
+    title_map[clean_title] = sp["id"]
 
 # -----------------------------
 # Fetch Supplier products
@@ -84,6 +87,7 @@ for product in supplier_products:
     if not supplier_sku:
         continue
 
+    # Swap title and body_html
     title = clean_text(product.get("body_html", "No Title"))
     body_html = clean_text(product.get("title", ""))
 
@@ -112,33 +116,42 @@ for product in supplier_products:
         }
     }
 
-    if supplier_sku in sku_map:
-        # Update product
-        prod_id = sku_map[supplier_sku]["product_id"]
-        var_id = sku_map[supplier_sku]["variant_id"]
-        inv_id = sku_map[supplier_sku]["inventory_item_id"]
+    existing_product_id = None
+    variant_id = None
+    inventory_item_id = None
 
-        resp = requests.put(f"{SHOP_URL}/products/{prod_id}.json", headers=shopify_headers, json=payload)
+    # Check by SKU first
+    if supplier_sku in sku_map:
+        existing_product_id = sku_map[supplier_sku]["product_id"]
+        variant_id = sku_map[supplier_sku]["variant_id"]
+        inventory_item_id = sku_map[supplier_sku]["inventory_item_id"]
+
+    # Fallback: check by cleaned title
+    elif title in title_map:
+        existing_product_id = title_map[title]
+        # Fetch variant_id & inventory_item_id
+        prod_resp = requests.get(f"{SHOP_URL}/products/{existing_product_id}.json", headers=shopify_headers)
+        prod_data = prod_resp.json().get("product", {})
+        if prod_data.get("variants"):
+            variant_id = prod_data["variants"][0]["id"]
+            inventory_item_id = prod_data["variants"][0]["inventory_item_id"]
+
+    if existing_product_id:
+        # Update product
+        resp = requests.put(f"{SHOP_URL}/products/{existing_product_id}.json", headers=shopify_headers, json=payload)
         print(f"Updated product {supplier_sku}: {resp.status_code}")
 
         # Update inventory
-        inv_payload = {
-            "location_id": LOCATION_ID,
-            "inventory_item_id": inv_id,
-            "available": supplier_variant.get("inventory_quantity", 0)
-        }
-        inv_resp = requests.post(f"{SHOP_URL}/inventory_levels/set.json", headers=shopify_headers, json=inv_payload)
-        print(f"Updated inventory {supplier_sku}: {inv_resp.status_code}")
+        if inventory_item_id:
+            inv_payload = {
+                "location_id": LOCATION_ID,
+                "inventory_item_id": inventory_item_id,
+                "available": supplier_variant.get("inventory_quantity", 0)
+            }
+            inv_resp = requests.post(f"{SHOP_URL}/inventory_levels/set.json", headers=shopify_headers, json=inv_payload)
+            print(f"Updated inventory {supplier_sku}: {inv_resp.status_code}")
 
     else:
         # Create product
         resp = requests.post(f"{SHOP_URL}/products.json", headers=shopify_headers, json=payload)
         print(f"Created product {supplier_sku}: {resp.status_code}")
-
-        created_product = resp.json().get("product", {})
-        if created_product:
-            sku_map[supplier_sku] = {
-                "product_id": created_product["id"],
-                "variant_id": created_product["variants"][0]["id"],
-                "inventory_item_id": created_product["variants"][0]["inventory_item_id"]
-            }
