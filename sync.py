@@ -27,14 +27,27 @@ def get_shopify_locations():
     r.raise_for_status()
     locations = r.json().get("locations", [])
     if not locations:
-        raise Exception("No Shopify locations found. Check API permissions.")
-    return locations[0]["id"]  # use first location
+        raise Exception("No Shopify locations found.")
+    return locations[0]["id"]
 
-def find_variant_by_sku(sku):
-    r = requests.get(f"{SHOP_URL}/variants.json?sku={sku}", headers=shopify_headers)
-    r.raise_for_status()
-    variants = r.json().get("variants", [])
-    return variants[0] if variants else None
+def fetch_all_shopify_variants():
+    """Fetch all products and variants once and store in dict by SKU"""
+    variants_by_sku = {}
+    page = 1
+    while True:
+        r = requests.get(f"{SHOP_URL}/products.json?limit=250&page={page}", headers=shopify_headers)
+        r.raise_for_status()
+        products = r.json().get("products", [])
+        if not products:
+            break
+        for product in products:
+            for variant in product.get("variants", []):
+                sku = variant.get("sku")
+                if sku:
+                    variants_by_sku[sku] = variant
+        page += 1
+        time.sleep(0.5)  # small pause to avoid rate limit
+    return variants_by_sku
 
 def update_variant_price(variant_id, price):
     payload = {"variant": {"id": variant_id, "price": price}}
@@ -82,11 +95,15 @@ def create_product(product):
     time.sleep(0.5)  # pause to avoid hitting rate limit
 
 # -------------------------------
-# MAIN SYNC PROCESS
+# MAIN SYNC
 # -------------------------------
 def main():
     location_id = get_shopify_locations()
-    updated_inventory_items = set()  # track inventory items already updated
+    updated_inventory_items = set()
+
+    # Fetch all Shopify variants once
+    shopify_variants = fetch_all_shopify_variants()
+    print(f"Fetched {len(shopify_variants)} existing Shopify variants by SKU")
 
     # Fetch supplier products
     r = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
@@ -101,23 +118,22 @@ def main():
                 print(f"Skipping variant with no SKU in product {product.get('title')}")
                 continue
 
-            existing_variant = find_variant_by_sku(sku)
+            existing_variant = shopify_variants.get(sku)
             if existing_variant:
                 # Update price
                 update_variant_price(existing_variant["id"], variant.get("price", "0.00"))
-                # Update inventory only once per inventory_item_id
+                # Update inventory once per inventory_item_id
                 inventory_id = existing_variant["inventory_item_id"]
                 if inventory_id not in updated_inventory_items:
                     update_inventory(inventory_id, location_id, variant.get("inventory_quantity", 0))
                     updated_inventory_items.add(inventory_id)
-                    time.sleep(0.5)  # small delay to avoid 429
+                    time.sleep(0.5)
                 else:
                     print(f"Skipping duplicate inventory update for item {inventory_id}")
             else:
-                # Product doesn’t exist → create new product
                 create_product(product)
 
-    print("\n✅ Full sync completed.")
+    print("\n✅ Full sync completed without excessive API calls.")
 
 if __name__ == "__main__":
     main()
