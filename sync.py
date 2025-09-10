@@ -1,16 +1,10 @@
 import os
 import requests
 
-SHOP_URL = "https://cgdboutique.myshopify.com/admin/api/2023-10"
-SHOPIFY_TOKEN = os.getenv("SHOPIFY_TOKEN")
-shopify_headers = {"X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json"}
+SUPPLIER_API_URL = "https://the-brave-ones-childrens-fashion.myshopify.com/admin/api/2023-10/products.json"
+SUPPLIER_TOKEN = os.getenv("SUPPLIER_TOKEN")
+supplier_headers = {"X-Shopify-Access-Token": SUPPLIER_TOKEN}
 
-# Test 1: Fetch Products
-products_url = f"{SHOP_URL}/products.json?limit=1"
-r = requests.get(products_url, headers=shopify_headers)
-print("Products test:", r.status_code, r.text)
-
-# Test 2: Fetch Locations
-locations_url = f"{SHOP_URL}/locations.json"
-r2 = requests.get(locations_url, headers=shopify_headers)
-print("Locations test:", r2.status_code, r2.text)
+supplier_response = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
+print("Supplier test status:", supplier_response.status_code)
+print("Sample supplier data:", supplier_response.text[:500])  # first 500 chars
