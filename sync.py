@@ -1,33 +1,20 @@
-name: Shopify Sync
-
-on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
-
-jobs:
-  sync:
-    runs-on: ubuntu-latest
-    env:
-      SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
-      SHOPIFY_TOKEN: ${{ secrets.SHOPIFY_TOKEN }}
-      SUPPLIER_API_URL: ${{ secrets.SUPPLIER_API_URL }}
-      SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: 3.10
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests
-
-      - name: Run Shopify Sync
-        run: python sync.py
+0s
+Run python sync.py
+  python sync.py
+  shell: /usr/bin/bash -e {0}
+  env:
+    SHOPIFY_STORE: ***
+    SHOPIFY_TOKEN: ***
+    SUPPLIER_API_URL: ***
+    SUPPLIER_TOKEN: ***
+    pythonLocation: /opt/hostedtoolcache/Python/3.13.7/x64
+    PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.13.7/x64/lib/pkgconfig
+    Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.13.7/x64
+    Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.13.7/x64
+    Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.13.7/x64
+    LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.13.7/x64/lib
+  File "/home/runner/work/sync.py/sync.py/sync.py", line 1
+    name: Shopify Sync
+                  ^^^^
+SyntaxError: invalid syntax
+Error: Process completed with exit code 1.
