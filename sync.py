@@ -1,64 +1,33 @@
-import os
-import requests
+name: Shopify Sync
 
-# -------------------------------
-# CONFIG
-# -------------------------------
-SHOP_STORE = os.environ.get("SHOPIFY_STORE")
-SHOP_URL = f"https://{SHOP_STORE}.myshopify.com/admin/api/2023-10"
-SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
-shopify_headers = {
-    "X-Shopify-Access-Token": SHOPIFY_TOKEN,
-    "Content-Type": "application/json"
-}
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
-SUPPLIER_API_URL = os.environ.get("SUPPLIER_API_URL")
-SUPPLIER_TOKEN = os.environ.get("SUPPLIER_TOKEN")
-supplier_headers = {
-    "X-Shopify-Access-Token": SUPPLIER_TOKEN,
-    "Content-Type": "application/json"
-}
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+      SHOPIFY_TOKEN: ${{ secrets.SHOPIFY_TOKEN }}
+      SUPPLIER_API_URL: ${{ secrets.SUPPLIER_API_URL }}
+      SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
 
-# -------------------------------
-# STEP 1: Test Shopify Products
-# -------------------------------
-print("=== Testing Shopify Store Products ===")
-try:
-    r = requests.get(f"{SHOP_URL}/products.json?limit=1", headers=shopify_headers)
-    r.raise_for_status()
-    products = r.json().get("products", [])
-    print(f"Shopify products fetched: {len(products)}")
-    if products:
-        print("Sample product title:", products[0]["title"])
-except Exception as e:
-    print("Error fetching Shopify products:", e)
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-# -------------------------------
-# STEP 2: Test Shopify Locations
-# -------------------------------
-print("\n=== Testing Shopify Locations ===")
-try:
-    r = requests.get(f"{SHOP_URL}/locations.json", headers=shopify_headers)
-    r.raise_for_status()
-    locations = r.json().get("locations", [])
-    print(f"Shopify locations fetched: {len(locations)}")
-    if locations:
-        print("Sample location:", locations[0]["name"], "| ID:", locations[0]["id"])
-except Exception as e:
-    print("Error fetching Shopify locations:", e)
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.10
 
-# -------------------------------
-# STEP 3: Test Supplier Products
-# -------------------------------
-print("\n=== Testing Supplier Products ===")
-try:
-    r = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
-    r.raise_for_status()
-    supplier_products = r.json().get("products", [])
-    print(f"Supplier products fetched: {len(supplier_products)}")
-    if supplier_products:
-        print("Sample supplier product title:", supplier_products[0]["title"])
-except Exception as e:
-    print("Error fetching supplier products:", e)
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
 
-print("\n✅ All tests completed.")
+      - name: Run Shopify Sync
+        run: python sync.py
