@@ -1,17 +1,16 @@
 name: Shopify Sync
 
-# Trigger manually or on schedule (2AM UTC daily)
 on:
-  workflow_dispatch:  
+  workflow_dispatch:   # allows manual run
   schedule:
-    - cron: "0 2 * * *"
+    - cron: "0 2 * * *"   # runs every day at 2AM UTC
 
 jobs:
   sync:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v3
 
       - name: Set up Python
@@ -20,11 +19,12 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install requests python-dotenv
+        run: pip install requests
 
-      - name: Run Shopify sync
+      - name: Run sync script
         run: python sync.py
         env:
+          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
           SHOPIFY_TOKEN: ${{ secrets.SHOPIFY_TOKEN }}
           SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
           SUPPLIER_API_URL: ${{ secrets.SUPPLIER_API_URL }}
