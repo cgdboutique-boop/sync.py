@@ -1,9 +1,9 @@
 name: Shopify Sync
 
 on:
-  workflow_dispatch:   # allows manual run
+  workflow_dispatch:   # manual run
   schedule:
-    - cron: "0 2 * * *"   # runs every day at 2AM UTC
+    - cron: "0 2 * * *"   # runs daily at 2AM UTC
 
 jobs:
   sync:
@@ -19,14 +19,11 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install requests python-dotenv
+        run: pip install requests
 
       - name: Run sync script
         run: python sync.py
         env:
-     SUPPLIER_API_URL: ${{ secrets.SUPPLIER_API_URL }}
-          SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
           SHOPIFY_TOKEN: ${{ secrets.SHOPIFY_TOKEN }}
-          SHOPIFY_API_KEY: ${{ secrets.SHOPIFY_API_KEY }}
-          SHOPIFY_PASSWORD: ${{ secrets.SHOPIFY_PASSWORD }}
-          SHOPIFY_STORE: cgdboutique
+          SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
+          SUPPLIER_API_URL: ${{ secrets.SUPPLIER_API_URL }}
