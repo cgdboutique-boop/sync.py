@@ -1,6 +1,7 @@
 import os
 import requests
 import time
+from math import ceil
 
 # ---- Shopify setup ----
 SHOPIFY_STORE = os.getenv("SHOPIFY_STORE")
@@ -24,7 +25,7 @@ if not SUPPLIER_API_URL or not SUPPLIER_TOKEN:
 
 supplier_headers = {"X-Shopify-Access-Token": SUPPLIER_TOKEN}
 
-# ---- Safe request with retries and JSON validation ----
+# ---- Safe request with retries ----
 def safe_request(method, url, **kwargs):
     for attempt in range(5):
         try:
@@ -64,22 +65,30 @@ def fetch_shopify_variants():
 
 # ---- Get location ID ----
 def get_location_id():
-    data = safe_request(f"GET", f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/locations.json", headers=shopify_headers)
+    data = safe_request("GET", f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/locations.json", headers=shopify_headers)
     return data["locations"][0]["id"]
 
-# ---- Update price ----
-def update_price(variant_id, new_price, sku):
-    url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/variants/{variant_id}.json"
-    payload = {"variant": {"id": variant_id, "price": new_price}}
-    safe_request("PUT", url, headers=shopify_headers, json=payload)
-    print(f"✅ Updated price for SKU {sku} → {new_price}")
+# ---- Batch update prices ----
+def update_prices_batch(updates):
+    for update in updates:
+        url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/variants/{update['variant_id']}.json"
+        payload = {"variant": {"id": update['variant_id'], "price": update['price']}}
+        safe_request("PUT", url, headers=shopify_headers, json=payload)
+        print(f"✅ Updated price for SKU {update['sku']} → {update['price']}")
+        time.sleep(0.2)
 
-# ---- Update inventory ----
-def update_inventory(inventory_item_id, location_id, quantity, sku):
-    url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/inventory_levels/set.json"
-    payload = {"location_id": location_id, "inventory_item_id": inventory_item_id, "available": int(quantity)}
-    safe_request("POST", url, headers=shopify_headers, json=payload)
-    print(f"✅ Inventory for SKU {sku} set to {quantity}")
+# ---- Batch update inventory ----
+def update_inventory_batch(updates, location_id):
+    for update in updates:
+        url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/inventory_levels/set.json"
+        payload = {
+            "location_id": location_id,
+            "inventory_item_id": update['inventory_item_id'],
+            "available": int(update['quantity'])
+        }
+        safe_request("POST", url, headers=shopify_headers, json=payload)
+        print(f"✅ Inventory for SKU {update['sku']} set to {update['quantity']}")
+        time.sleep(0.2)
 
 # ---- Main sync ----
 def main():
@@ -89,10 +98,13 @@ def main():
     location_id = get_location_id()
     print(f"🔹 Fetched {len(supplier_products)} supplier products")
 
+    price_updates = []
+    inventory_updates = []
+
     for product in supplier_products:
         sku = str(product.get("sku"))
         if not sku:
-            continue  # skip if SKU missing
+            continue
         price = product.get("price")
         quantity = product.get("quantity", 0)
 
@@ -104,17 +116,22 @@ def main():
         variant_id = variant["id"]
         inventory_item_id = variant["inventory_item_id"]
 
-        # Update price
         if str(variant.get("price")) != str(price):
-            update_price(variant_id, price, sku)
-            time.sleep(0.2)
+            price_updates.append({"variant_id": variant_id, "price": price, "sku": sku})
 
-        # Update inventory
-        update_inventory(inventory_item_id, location_id, quantity, sku)
-        time.sleep(0.2)  # small delay to avoid Shopify throttling
+        inventory_updates.append({"inventory_item_id": inventory_item_id, "quantity": quantity, "sku": sku})
+
+    # ---- Process updates in batches of 100 ----
+    batch_size = 100
+    for i in range(0, len(price_updates), batch_size):
+        update_prices_batch(price_updates[i:i+batch_size])
+        time.sleep(1)  # delay between batches
+
+    for i in range(0, len(inventory_updates), batch_size):
+        update_inventory_batch(inventory_updates[i:i+batch_size], location_id)
+        time.sleep(1)
 
     print("✅ Shopify Sync Complete")
 
 if __name__ == "__main__":
     main()
-
