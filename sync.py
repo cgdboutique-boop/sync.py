@@ -4,8 +4,8 @@ import requests
 # -----------------------------
 # CONFIGURATION
 # -----------------------------
-# Supplier store (read-only)
-SUPPLIER_STORE = "the-brave-ones-childrens-fashion.myshopify.com"
+# Supplier store API (read-only)
+SUPPLIER_API_URL = "https://the-brave-ones-childrens-fashion.myshopify.com/admin/api/2025-07/products.json"
 SUPPLIER_TOKEN = os.environ.get("SUPPLIER_TOKEN")  # Supplier API token
 
 # Your store (write access)
@@ -18,9 +18,8 @@ API_VERSION = "2025-07"
 # HELPER FUNCTIONS
 # -----------------------------
 def fetch_supplier_products():
-    url = f"https://{SUPPLIER_STORE}/admin/api/{API_VERSION}/products.json"
     headers = {"X-Shopify-Access-Token": SUPPLIER_TOKEN}
-    response = requests.get(url, headers=headers)
+    response = requests.get(SUPPLIER_API_URL, headers=headers)
     
     if response.status_code != 200:
         print(f"Failed to fetch supplier products: {response.status_code}")
@@ -73,4 +72,37 @@ def push_product_to_store(product):
                     "inventory_quantity": v.get("inventory_quantity", 0)
                 } for v in product.get("variants", [])
             ],
-            "images": [{"src": img.get("src")}]()
+            "images": [{"src": img.get("src")} for img in product.get("images", [])]
+        }
+    }
+    
+    if existing_product:
+        # Update existing product
+        product_id = existing_product["id"]
+        update_url = f"https://{YOUR_STORE}/admin/api/{API_VERSION}/products/{product_id}.json"
+        response = requests.put(update_url, headers=headers, json=product_data)
+        if response.status_code == 200:
+            print(f"🔄 Updated product: {product.get('title')}")
+        else:
+            print(f"❌ Failed to update: {product.get('title')}")
+            print(response.status_code, response.text)
+    else:
+        # Create new product
+        response = requests.post(url, headers=headers, json=product_data)
+        if response.status_code in [200, 201]:
+            print(f"✅ Created product: {product.get('title')}")
+        else:
+            print(f"❌ Failed to create: {product.get('title')}")
+            print(response.status_code, response.text)
+
+# -----------------------------
+# MAIN SYNC PROCESS
+# -----------------------------
+def main():
+    supplier_products = fetch_supplier_products()
+    
+    if not supplier_products:
+        print("No products to sync.")
+        return
+    
+    for produ
