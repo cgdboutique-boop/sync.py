@@ -1,4 +1,4 @@
-name: Sync Shopify and Supplier
+name: Sync Shopify Stores
 
 on:
   push:
@@ -12,8 +12,8 @@ jobs:
     env:
       SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
       SHOPIFY_TOKEN: ${{ secrets.SHOPIFY_TOKEN }}
-      SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
       SUPPLIER_API_URL: ${{ secrets.SUPPLIER_API_URL }}
+      SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
 
     steps:
       - name: Checkout repository
@@ -29,4 +29,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
 
+      - name: Debug environment variables
+        run: |
+          echo "SHOPIFY_STORE=$SHOPIFY_STORE"
+          echo "SUPPLIER_API_URL=${SUPPLIER_API_URL:0:20}..."
+          echo "SUPPLIER_TOKEN length=${#SUPPLIER_TOKEN}"
+
       - name: Run sync.py
+        run: python sync.py
