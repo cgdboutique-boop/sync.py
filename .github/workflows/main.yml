@@ -22,14 +22,12 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.10  # ✅ Corrected version
-          check-latest: true
+          python-version: 3.10
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests python-dotenv
+          pip install requests
 
       - name: Run Shopify Sync
-        run: |
-          python sync.py
+        run: python sync.py
