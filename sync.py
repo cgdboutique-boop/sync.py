@@ -1,7 +1,7 @@
 import os
 import requests
 import time
-import argparse
+import re
 
 # -------------------------------
 # CONFIG (from GitHub secrets)
@@ -27,7 +27,7 @@ supplier_headers = {
 }
 
 # -------------------------------
-# HELPER FUNCTION
+# HELPER FUNCTIONS
 # -------------------------------
 def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     retry_delay = 2
@@ -49,72 +49,99 @@ def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     return None
 
 # -------------------------------
-# FETCH SUPPLIER PRODUCTS
+# FETCH SUPPLIER PRODUCTS (batch)
 # -------------------------------
-def fetch_supplier_products(limit=None):
-    url = f"{SUPPLIER_API_URL}?limit={limit or 100}"
+def fetch_supplier_products(limit=100, page_info=None):
+    url = f"{SUPPLIER_API_URL}?limit={limit}"
+    if page_info:
+        url += f"&page_info={page_info}"
+
     r = request_with_retry("GET", url, headers=supplier_headers)
-    if r is None:
+    if not r:
         print("❌ Failed to fetch supplier products.")
+        return []
+
+    data = r.json()
+    return data.get("products", []), data.get("next_page_info")
+
+# -------------------------------
+# FETCH SHOPIFY PRODUCTS
+# -------------------------------
+def fetch_shopify_products():
+    r = request_with_retry("GET", f"{SHOP_URL}/products.json?limit=250", headers=shopify_headers)
+    if not r:
         return []
     return r.json().get("products", [])
 
 # -------------------------------
 # SYNC PRODUCTS
 # -------------------------------
-def sync_products(limit=None):
-    print(f"=== Starting supplier sync (limit={limit or 'ALL'}) ===")
-    supplier_products = fetch_supplier_products(limit=limit)
+def sync_products(limit=100):
+    print(f"=== Starting supplier sync (limit={limit}) ===")
 
-    if not supplier_products:
-        print("❌ No products fetched from supplier.")
-        return
+    next_page = None
+    total_processed = 0
 
-    # Fetch existing Shopify products (first 250 only for now)
-    r = request_with_retry("GET", f"{SHOP_URL}/products.json?limit=250", headers=shopify_headers)
-    shopify_products = r.json().get("products", []) if r else []
-    existing_dict = {p['handle']: p for p in shopify_products}
+    shopify_products = fetch_shopify_products()
+    shopify_dict_by_handle = {p["handle"]: p for p in shopify_products}
 
-    processed = 0
-    for sp in supplier_products:
-        # Pick identifier priority: SKU → handle → title
-        handle = sp.get("sku") or sp.get("handle") or sp.get("title")
-        if not handle:
-            print(f"⚠️ Skipping product with no identifier: {sp}")
-            continue
+    while True:
+        supplier_batch, next_page = fetch_supplier_products(limit=limit, page_info=next_page)
+        if not supplier_batch:
+            break
 
-        product_data = {
-            "product": {
-                "title": sp.get("title", ""),
-                "body_html": sp.get("body_html", ""),
-                "vendor": sp.get("vendor", ""),
-                "product_type": sp.get("product_type", ""),
-                "tags": sp.get("tags", ""),
-                "handle": handle
+        for sp in supplier_batch:
+            sku = sp.get("sku")
+            handle = sp.get("handle")
+            title = sp.get("title")
+
+            if not (sku or handle or title):
+                print(f"Skipping product with missing SKU, handle, and title.")
+                continue
+
+            key = sku or handle or title
+
+            existing = None
+            if handle and handle in shopify_dict_by_handle:
+                existing = shopify_dict_by_handle[handle]
+
+            product_data = {
+                "product": {
+                    "title": title or "",
+                    "body_html": sp.get("body_html", ""),
+                    "vendor": sp.get("vendor", ""),
+                    "product_type": sp.get("product_type", ""),
+                    "tags": sp.get("tags", ""),
+                    "handle": handle or key
+                }
             }
-        }
 
-        if handle in existing_dict:
-            product_id = existing_dict[handle]["id"]
-            r = request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=product_data)
-            if r:
-                print(f"✅ Updated: {handle}")
-        else:
-            r = request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json=product_data)
-            if r:
-                print(f"✨ Created: {handle}")
+            if existing:
+                product_id = existing["id"]
+                r = request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=product_data)
+                if r:
+                    print(f"Updated: {key}")
+                else:
+                    print(f"Failed to update: {key}")
+            else:
+                r = request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json=product_data)
+                if r:
+                    print(f"Created: {key}")
+                else:
+                    print(f"Failed to create: {key}")
 
-        processed += 1
-        time.sleep(1)  # slow down requests
+            time.sleep(1)  # slow down requests
 
-    print(f"\n✅ Sync complete. {processed} products processed.")
+        total_processed += len(supplier_batch)
+        print(f"Processed batch. Total products processed: {total_processed}")
+
+        if not next_page:
+            break
+
+    print("\n✅ All supplier products synced!")
 
 # -------------------------------
-# MAIN
+# RUN
 # -------------------------------
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--limit", type=int, help="Limit number of supplier products to sync")
-    args = parser.parse_args()
-
-    sync_products(limit=args.limit)
+    sync_products(limit=100)
