@@ -1,7 +1,6 @@
 import os
 import requests
 import time
-import re
 
 # -------------------------------
 # CONFIG (from GitHub secrets)
@@ -11,8 +10,10 @@ SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
 SUPPLIER_API_URL = os.environ.get("SUPPLIER_API_URL")
 SUPPLIER_TOKEN = os.environ.get("SUPPLIER_TOKEN")
 
-if not SHOPIFY_STORE or not SHOPIFY_TOKEN or not SUPPLIER_API_URL or not SUPPLIER_TOKEN:
-    raise ValueError("One or more secrets are missing!")
+if not SHOPIFY_STORE or not SHOPIFY_TOKEN:
+    raise ValueError("SHOPIFY_STORE or SHOPIFY_TOKEN is not set!")
+if not SUPPLIER_API_URL or not SUPPLIER_TOKEN:
+    raise ValueError("SUPPLIER_API_URL or SUPPLIER_TOKEN is not set!")
 
 SHOP_URL = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2025-07"
 shopify_headers = {
@@ -25,7 +26,7 @@ supplier_headers = {
 }
 
 # -------------------------------
-# HELPER FUNCTIONS
+# HELPER FUNCTION
 # -------------------------------
 def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     retry_delay = 2
@@ -37,8 +38,6 @@ def request_with_retry(method, url, headers=None, json=None, max_retries=5):
                 print(f"429 Rate limit hit. Sleeping {retry_after}s...")
                 time.sleep(retry_after)
                 continue
-            if response.status_code == 404:
-                return None  # Product not found
             response.raise_for_status()
             return response
         except requests.exceptions.RequestException as e:
@@ -47,97 +46,67 @@ def request_with_retry(method, url, headers=None, json=None, max_retries=5):
             retry_delay *= 2
     raise Exception(f"Failed request after {max_retries} attempts: {url}")
 
-def fetch_supplier_products():
-    r = request_with_retry("GET", f"{SUPPLIER_API_URL}?limit=100", headers=supplier_headers)
-    if not r:
-        return []
-    return r.json().get("products", [])
-
-def fetch_shopify_products():
-    products = []
-    page_info = None
-    while True:
-        url = f"{SHOP_URL}/products.json?limit=250"
-        if page_info:
-            url += f"&page_info={page_info}"
-        r = request_with_retry("GET", url, headers=shopify_headers)
-        batch = r.json().get("products", [])
-        products.extend(batch)
-        link = r.headers.get("Link", "")
-        if 'rel="next"' in link:
-            match = re.search(r'page_info=([^&>]+)', link)
-            page_info = match.group(1) if match else None
-        else:
-            break
-    return {p['handle'].lower(): p for p in products}
-
-def create_product(payload):
-    if payload["variants"][0]["inventory_quantity"] <= 0:
-        print(f"Skipping creation (zero stock): {payload['title']}")
-        return
-    r = request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json={"product": payload})
-    if r:
-        print(f"Created: {payload['title']}")
-
-def update_product(product_id, payload):
-    if payload["variants"][0]["inventory_quantity"] <= 0:
-        # Delete zero-stock product
-        r = request_with_retry("DELETE", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers)
-        if r is not None:
-            print(f"Deleted zero-stock product ID {product_id}")
-        return
-    r = request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json={"product": payload})
-    if r:
-        print(f"Updated: {payload['title']}")
+# -------------------------------
+# FETCH SUPPLIER PRODUCTS
+# -------------------------------
+def fetch_supplier_products(limit=100):
+    url = f"{SUPPLIER_API_URL}?limit={limit}"
+    r = request_with_retry("GET", url, headers=supplier_headers)
+    data = r.json()
+    return data.get("products", [])
 
 # -------------------------------
-# MAIN SYNC FUNCTION
+# SYNC FUNCTION
 # -------------------------------
-def sync_products():
-    supplier_products = fetch_supplier_products()
+def sync_products(limit=100):
+    supplier_products = fetch_supplier_products(limit=limit)
     if not supplier_products:
         print("No products fetched from supplier.")
         return
 
-    shopify_products = fetch_shopify_products()
+    # Fetch existing Shopify products
+    existing_products = request_with_retry("GET", f"{SHOP_URL}/products.json?limit=250", headers=shopify_headers).json().get("products", [])
+    existing_dict = {p['handle']: p for p in existing_products}
 
     for item in supplier_products:
-        title = item.get("title")
-        handle = (item.get("handle") or "").strip().lower()
-        price = item.get("price")
+        handle = item.get("handle")
         stock = item.get("stock", 0)
 
-        # Skip incomplete or zero-stock items
-        if not title or not handle or price is None or stock <= 0:
-            print(f"Skipping product: {title} (handle: {handle})")
+        # Skip products with zero stock
+        if stock == 0:
+            print(f"Skipping zero-stock product: {handle}")
             continue
 
         payload = {
-            "title": title,
-            "handle": handle,
-            "body_html": item.get("body_html") or item.get("description", ""),
-            "vendor": item.get("vendor", ""),
-            "product_type": item.get("product_type", ""),
-            "tags": item.get("tags", ""),
-            "variants": [
-                {
-                    "price": str(price),
+            "product": {
+                "title": item.get("title"),
+                "body_html": item.get("description", ""),
+                "vendor": item.get("vendor", ""),
+                "product_type": item.get("product_type", ""),
+                "tags": item.get("tags", ""),
+                "handle": handle,
+                "variants": [{
+                    "price": str(item.get("price", "0.00")),
                     "inventory_quantity": stock,
                     "sku": item.get("sku", handle)
-                }
-            ],
-            "images": [{"src": img} for img in item.get("images", [])] if item.get("images") else []
+                }],
+                "images": [{"src": img} for img in item.get("images", [])] if item.get("images") else []
+            }
         }
 
-        if handle in shopify_products:
-            product_id = shopify_products[handle]["id"]
-            update_product(product_id, payload)
+        if handle in existing_dict:
+            product_id = existing_dict[handle]['id']
+            request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=payload)
+            print(f"Updated: {handle}")
         else:
-            create_product(payload)
+            request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json=payload)
+            print(f"Created: {handle}")
+
+        time.sleep(1)  # avoid hitting rate limits
 
 # -------------------------------
-# RUN
+# RUN SYNC
 # -------------------------------
-print("=== Starting supplier sync ===")
-sync_products()
-print("✅ Supplier sync complete!")
+print("=== Starting supplier sync (test 100 items) ===")
+sync_products(limit=100)
+print("✅ Sync complete")
