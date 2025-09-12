@@ -48,64 +48,58 @@ def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     return None
 
 # -------------------------------
-# FETCH SINGLE PRODUCT FROM SUPPLIER
+# FETCH SUPPLIER PRODUCTS (batch)
 # -------------------------------
-def fetch_supplier_product(handle):
-    url = f"{SUPPLIER_API_URL}?handle={handle}"
+def fetch_supplier_products(limit=100):
+    url = f"{SUPPLIER_API_URL}?limit={limit}"
     r = request_with_retry("GET", url, headers=supplier_headers)
     if r is None:
-        print(f"Failed to fetch supplier product: {handle}")
-        return None
-    products = r.json().get("products", [])
-    return products[0] if products else None
+        print("❌ Failed to fetch supplier products.")
+        return []
+    return r.json().get("products", [])
 
 # -------------------------------
-# SYNC SINGLE PRODUCT
+# FETCH SHOPIFY PRODUCTS (batch)
 # -------------------------------
-def sync_single_product(handle):
-    print(f"=== Syncing single product: {handle} ===")
-    sp = fetch_supplier_product(handle)
-    if not sp:
-        print(f"No product found in supplier: {handle}")
-        return
-
-    # Fetch Shopify products
-    r = request_with_retry("GET", f"{SHOP_URL}/products.json?handle={handle}", headers=shopify_headers)
+def fetch_shopify_products(limit=100):
+    url = f"{SHOP_URL}/products.json?limit={limit}"
+    r = request_with_retry("GET", url, headers=shopify_headers)
     if r is None:
-        print("Failed to fetch Shopify product.")
-        return
-    shopify_products = r.json().get("products", [])
-    existing = shopify_products[0] if shopify_products else None
-
-    product_data = {
-        "product": {
-            "title": sp.get("title", ""),
-            "body_html": sp.get("body_html", ""),
-            "vendor": sp.get("vendor", ""),
-            "product_type": sp.get("product_type", ""),
-            "tags": sp.get("tags", ""),
-            "handle": handle
-        }
-    }
-
-    if existing:
-        product_id = existing["id"]
-        r = request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=product_data)
-        if r:
-            print(f"Updated: {handle}")
-        else:
-            print(f"Failed to update: {handle}")
-    else:
-        r = request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json=product_data)
-        if r:
-            print(f"Created: {handle}")
-        else:
-            print(f"Failed to create: {handle}")
-
-    print("✅ Sync completed.")
+        print("❌ Failed to fetch Shopify products.")
+        return []
+    return r.json().get("products", [])
 
 # -------------------------------
-# RUN
+# MATCH PRODUCT (SKU > Handle > Title/Desc)
 # -------------------------------
-if __name__ == "__main__":
-    sync_single_product("black-gold-sequince-dress")
+def match_product(sp, shopify_products):
+    sp_sku = None
+    if sp.get("variants"):
+        sp_sku = sp["variants"][0].get("sku")
+
+    sp_handle = sp.get("handle", "")
+    sp_title = sp.get("title", "").lower()
+    sp_body = (sp.get("body_html", "") or "").lower()
+
+    for p in shopify_products:
+        # 1. Match SKU
+        for v in p.get("variants", []):
+            if sp_sku and v.get("sku") == sp_sku:
+                return p
+        # 2. Match handle
+        if sp_handle and p.get("handle") == sp_handle:
+            return p
+        # 3. Match by title/body (loose check)
+        if sp_title and sp_title in p.get("title", "").lower():
+            return p
+        if sp_body and sp_body[:40] in (p.get("body_html", "") or "").lower():
+            return p
+    return None
+
+# -------------------------------
+# SYNC SUPPLIER PRODUCT
+# -------------------------------
+def sync_product(sp, shopify_products):
+    existing = match_product(sp, shopify_products)
+
+    handle = sp.get("handle", f"sku-{sp.get('variants',[{}])[0].get('sku','no-handle
