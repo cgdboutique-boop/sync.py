@@ -1,6 +1,7 @@
 import os
 import requests
 import time
+import re
 
 # -------------------------------
 # CONFIG (from GitHub secrets)
@@ -26,7 +27,7 @@ supplier_headers = {
 }
 
 # -------------------------------
-# HELPER FUNCTION
+# HELPER FUNCTIONS
 # -------------------------------
 def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     retry_delay = 2
@@ -52,61 +53,62 @@ def request_with_retry(method, url, headers=None, json=None, max_retries=5):
 def fetch_supplier_products(limit=100):
     url = f"{SUPPLIER_API_URL}?limit={limit}"
     r = request_with_retry("GET", url, headers=supplier_headers)
-    data = r.json()
-    return data.get("products", [])
+    return r.json().get("products", [])
 
 # -------------------------------
-# SYNC FUNCTION
+# SYNC INVENTORY
 # -------------------------------
-def sync_products(limit=100):
+def sync_inventory(limit=100):
     supplier_products = fetch_supplier_products(limit=limit)
-    if not supplier_products:
-        print("No products fetched from supplier.")
-        return
+    print(f"Fetched {len(supplier_products)} supplier products")
 
-    # Fetch existing Shopify products
-    existing_products = request_with_retry("GET", f"{SHOP_URL}/products.json?limit=250", headers=shopify_headers).json().get("products", [])
-    existing_dict = {p['handle']: p for p in existing_products}
+    shopify_products = request_with_retry(
+        "GET", f"{SHOP_URL}/products.json?limit=250", headers=shopify_headers
+    ).json().get("products", [])
+    shopify_dict = {p['handle']: p for p in shopify_products}
 
-    for item in supplier_products:
-        handle = item.get("handle")
-        stock = item.get("stock", 0)
+    for p in supplier_products:
+        handle = p.get("handle")
+        sku = p.get("sku")
+        stock = p.get("stock", 0)
+        price = p.get("price")
 
-        # Skip products with zero stock
-        if stock == 0:
-            print(f"Skipping zero-stock product: {handle}")
+        if not handle or not sku or stock == 0 or price is None:
+            print(f"Skipping {handle or 'unknown'} (missing handle/SKU/stock/price)")
             continue
 
-        payload = {
-            "product": {
-                "title": item.get("title"),
-                "body_html": item.get("description", ""),
-                "vendor": item.get("vendor", ""),
-                "product_type": item.get("product_type", ""),
-                "tags": item.get("tags", ""),
-                "handle": handle,
-                "variants": [{
-                    "price": str(item.get("price", "0.00")),
-                    "inventory_quantity": stock,
-                    "sku": item.get("sku", handle)
-                }],
-                "images": [{"src": img} for img in item.get("images", [])] if item.get("images") else []
+        if handle not in shopify_dict:
+            print(f"Product {handle} not found in Shopify, skipping creation for now")
+            continue
+
+        product_id = shopify_dict[handle]['id']
+        variant_id = shopify_dict[handle]['variants'][0]['id']
+
+        inventory_payload = {
+            "variant": {
+                "id": variant_id,
+                "inventory_quantity": stock,
+                "price": str(price)
             }
         }
 
-        if handle in existing_dict:
-            product_id = existing_dict[handle]['id']
-            request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=payload)
-            print(f"Updated: {handle}")
-        else:
-            request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json=payload)
-            print(f"Created: {handle}")
+        try:
+            request_with_retry(
+                "PUT", f"{SHOP_URL}/variants/{variant_id}.json",
+                headers=shopify_headers, json=inventory_payload
+            )
+            print(f"Updated inventory for {handle} (Stock: {stock}, Price: {price})")
+        except Exception as e:
+            print(f"Error updating {handle}: {e}")
+            continue
 
-        time.sleep(1)  # avoid hitting rate limits
+        time.sleep(1)  # slow requests
+
+    print("\n✅ Inventory sync completed for this batch")
 
 # -------------------------------
-# RUN SYNC
+# RUN SYNC (hourly-ready)
 # -------------------------------
-print("=== Starting supplier sync (test 100 items) ===")
-sync_products(limit=100)
-print("✅ Sync complete")
+if __name__ == "__main__":
+    print("=== Starting supplier inventory sync (test 100 items) ===")
+    sync_inventory(limit=100)
