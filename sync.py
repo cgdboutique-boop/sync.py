@@ -1,132 +1,91 @@
 import os
 import requests
 import time
-import re
 
-# -------------------------------
-# CONFIG (from GitHub secrets)
-# -------------------------------
-SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")
-SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
-SUPPLIER_API_URL = os.environ.get("SUPPLIER_API_URL")
-SUPPLIER_TOKEN = os.environ.get("SUPPLIER_TOKEN")
-
-if not SHOPIFY_STORE or not SHOPIFY_TOKEN:
-    raise ValueError("SHOPIFY_STORE or SHOPIFY_TOKEN is not set!")
-if not SUPPLIER_API_URL or not SUPPLIER_TOKEN:
-    raise ValueError("SUPPLIER_API_URL or SUPPLIER_TOKEN is not set!")
-
-SHOP_URL = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2025-07"
+# Shopify API
+shopify_store = os.getenv("SHOPIFY_STORE")
+shopify_token = os.getenv("SHOPIFY_TOKEN")
+shopify_url = f"https://{shopify_store}/admin/api/2025-07/products.json"
 shopify_headers = {
-    "X-Shopify-Access-Token": SHOPIFY_TOKEN,
-    "Content-Type": "application/json"
-}
-supplier_headers = {
-    "X-Shopify-Access-Token": SUPPLIER_TOKEN,
+    "X-Shopify-Access-Token": shopify_token,
     "Content-Type": "application/json"
 }
 
-# -------------------------------
-# HELPER FUNCTIONS
-# -------------------------------
-def request_with_retry(method, url, headers=None, json=None, max_retries=5):
-    retry_delay = 2
-    for attempt in range(max_retries):
-        try:
-            response = requests.request(method, url, headers=headers, json=json)
-            if response.status_code == 429:  # Too Many Requests
-                retry_after = int(response.headers.get("Retry-After", retry_delay))
-                print(f"429 Rate limit hit. Sleeping {retry_after}s...")
-                time.sleep(retry_after)
-                continue
-            response.raise_for_status()
-            return response
-        except requests.exceptions.RequestException as e:
-            print(f"Request error: {e}. Retrying in {retry_delay}s...")
-            time.sleep(retry_delay)
-            retry_delay *= 2
-    raise Exception(f"Failed request after {max_retries} attempts: {url}")
+# Supplier API
+supplier_api_url = os.getenv("SUPPLIER_API_URL")
+supplier_token = os.getenv("SUPPLIER_TOKEN")
+supplier_headers = {"Authorization": f"Bearer {supplier_token}"}
 
-def fetch_all_products(url, headers):
-    all_products = []
-    limit = 100
-    next_page_info = None
+# --- Helpers ---
+def get_supplier_products(page=1, per_page=100):
+    """Fetch one batch of products from supplier API"""
+    url = f"{supplier_api_url}?page={page}&per_page={per_page}"
+    r = requests.get(url, headers=supplier_headers)
+    r.raise_for_status()
+    return r.json()
+
+def find_shopify_product_by_sku(sku):
+    """Search Shopify for product with matching SKU"""
+    url = f"{shopify_url}?handle={sku}"
+    r = requests.get(url, headers=shopify_headers)
+    r.raise_for_status()
+    products = r.json().get("products", [])
+    return products[0] if products else None
+
+def create_shopify_product(product):
+    """Create new product in Shopify"""
+    payload = {"product": {
+        "title": product["name"],
+        "body_html": product.get("description", ""),
+        "variants": [{"sku": product["sku"], "price": product.get("price", "0")}]
+    }}
+    r = requests.post(shopify_url, headers=shopify_headers, json=payload)
+    r.raise_for_status()
+    print(f"✅ Created product {product['sku']}")
+
+def update_shopify_product(shopify_product, product):
+    """Update existing Shopify product"""
+    product_id = shopify_product["id"]
+    url = f"https://{shopify_store}/admin/api/2025-07/products/{product_id}.json"
+    payload = {"product": {
+        "id": product_id,
+        "title": product["name"],
+        "body_html": product.get("description", "")
+    }}
+    r = requests.put(url, headers=shopify_headers, json=payload)
+    r.raise_for_status()
+    print(f"🔄 Updated product {product['sku']}")
+
+# --- Main sync ---
+def sync_products():
+    page = 1
+    total_synced = 0
 
     while True:
-        fetch_url = f"{url}?limit={limit}"
-        if next_page_info:
-            fetch_url += f"&page_info={next_page_info}"
-
-        r = request_with_retry("GET", fetch_url, headers=headers)
-        data = r.json()
-        batch = data.get("products", [])
-        all_products.extend(batch)
-        print(f"Fetched {len(batch)} products this batch (total: {len(all_products)})")
-
-        link_header = r.headers.get("Link", "")
-        if 'rel="next"' in link_header:
-            match = re.search(r'page_info=([^&>]+)', link_header)
-            next_page_info = match.group(1) if match else None
-        else:
-            next_page_info = None
-
-        if not next_page_info:
+        products = get_supplier_products(page)
+        if not products:
+            print("🎉 Finished syncing all supplier products")
             break
 
-        time.sleep(1)  # small delay to avoid rate limit
+        for product in products:
+            sku = product.get("sku")
+            if not sku:
+                continue
 
-    return all_products
+            shopify_product = find_shopify_product_by_sku(sku)
+            if shopify_product:
+                update_shopify_product(shopify_product, product)
+            else:
+                create_shopify_product(product)
 
-# -------------------------------
-# FETCH PRODUCTS
-# -------------------------------
-print("=== Fetching Supplier Products ===")
-supplier_products = fetch_all_products(SUPPLIER_API_URL, supplier_headers)
-print(f"Total supplier products fetched: {len(supplier_products)}")
+            total_synced += 1
+            if total_synced % 100 == 0:
+                print(f"⏳ Synced {total_synced} products so far...")
 
-print("\n=== Fetching Your Shopify Store Products ===")
-your_products = fetch_all_products(f"{SHOP_URL}/products.json", shopify_headers)
-your_products_dict = {p['handle']: p for p in your_products}
-print(f"Your store products fetched: {len(your_products)}")
+            time.sleep(0.5)  # to respect API rate limits
 
-# -------------------------------
-# SYNC PRODUCTS
-# -------------------------------
-print("\n=== Syncing Products ===")
-existing_handles = set(your_products_dict.keys())
+        print(f"✅ Finished batch {page} ({len(products)} products)")
+        page += 1
 
-for supplier_product in supplier_products:
-    handle = supplier_product['handle']
-
-    # Remove any duplicates in the store (same handle)
-    duplicates = [p for p in your_products if p['handle'] == handle and p['id'] != your_products_dict.get(handle, {}).get('id')]
-    for dup in duplicates:
-        print(f"Deleting duplicate: {dup['handle']} ({dup['id']})")
-        request_with_retry("DELETE", f"{SHOP_URL}/products/{dup['id']}.json", headers=shopify_headers)
-        time.sleep(1)
-
-    product_data = {
-        "product": {
-            "title": supplier_product.get("title"),
-            "body_html": supplier_product.get("body_html"),
-            "vendor": supplier_product.get("vendor"),
-            "product_type": supplier_product.get("product_type"),
-            "tags": supplier_product.get("tags"),
-            "handle": handle
-        }
-    }
-
-    if handle in existing_handles:
-        # Update existing product
-        product_id = your_products_dict[handle]['id']
-        request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=product_data)
-        print(f"Updated: {handle}")
-    else:
-        # Create new product
-        request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json=product_data)
-        print(f"Created: {handle}")
-        existing_handles.add(handle)
-
-    time.sleep(1)  # small delay to avoid hitting rate limits
-
-print("\n✅ Sync complete!")
+if __name__ == "__main__":
+    sync_products()
