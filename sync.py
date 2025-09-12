@@ -27,6 +27,12 @@ supplier_headers = {
 }
 
 # -------------------------------
+# LIMIT SETTINGS
+# -------------------------------
+MAX_PRODUCTS_PER_RUN = 100  # stop after this many
+PER_REQUEST_DELAY = 1       # seconds between create/update
+
+# -------------------------------
 # FETCH SUPPLIER PRODUCTS
 # -------------------------------
 print("=== Fetching Supplier Products ===")
@@ -34,35 +40,34 @@ supplier_products = []
 limit = 100
 next_page_info = None
 
-while True:
+while len(supplier_products) < MAX_PRODUCTS_PER_RUN:
     url = f"{SUPPLIER_API_URL}?limit={limit}"
     if next_page_info:
         url += f"&page_info={next_page_info}"
+
+    r = requests.get(url, headers=supplier_headers)
     try:
-        r = requests.get(url, headers=supplier_headers)
         r.raise_for_status()
-        data = r.json()
-        batch = data.get("products", [])
-        supplier_products.extend(batch)
-        print(f"Fetched {len(batch)} products this batch")
-        
-        # Pagination
-        link_header = r.headers.get("Link", "")
-        if 'rel="next"' in link_header:
-            match = re.search(r'page_info=([^&>]+)', link_header)
-            next_page_info = match.group(1) if match else None
-        else:
-            next_page_info = None
-
-        if not next_page_info:
-            break
-
-        time.sleep(5)  # delay between pages
     except Exception as e:
         print("Error fetching supplier products:", e)
-        time.sleep(5)
+        break
 
-print(f"\nTotal supplier products fetched: {len(supplier_products)}")
+    data = r.json()
+    batch = data.get("products", [])
+    supplier_products.extend(batch)
+    print(f"Fetched {len(batch)} products this batch (total: {len(supplier_products)})")
+
+    # Pagination
+    link_header = r.headers.get("Link", "")
+    if 'rel="next"' in link_header and len(supplier_products) < MAX_PRODUCTS_PER_RUN:
+        match = re.search(r'page_info=([^&>]+)', link_header)
+        next_page_info = match.group(1) if match else None
+    else:
+        break
+
+    time.sleep(2)  # avoid hammering the API
+
+print(f"\nTotal supplier products fetched this run: {len(supplier_products)}")
 
 # -------------------------------
 # FETCH YOUR STORE PRODUCTS
@@ -76,35 +81,35 @@ while True:
     url = f"{SHOP_URL}/products.json?limit={limit}"
     if next_page_info:
         url += f"&page_info={next_page_info}"
+
+    r = requests.get(url, headers=shopify_headers)
     try:
-        r = requests.get(url, headers=shopify_headers)
         r.raise_for_status()
-        data = r.json()
-        batch = data.get("products", [])
-        your_products.extend(batch)
-
-        link_header = r.headers.get("Link", "")
-        if 'rel="next"' in link_header:
-            match = re.search(r'page_info=([^&>]+)', link_header)
-            next_page_info = match.group(1) if match else None
-        else:
-            next_page_info = None
-
-        if not next_page_info:
-            break
-
-        time.sleep(5)
     except Exception as e:
         print("Error fetching your store products:", e)
-        time.sleep(5)
+        break
+
+    data = r.json()
+    batch = data.get("products", [])
+    your_products.extend(batch)
+
+    link_header = r.headers.get("Link", "")
+    if 'rel=\"next\"' in link_header:
+        match = re.search(r'page_info=([^&>]+)', link_header)
+        next_page_info = match.group(1) if match else None
+    else:
+        break
+
+    if len(your_products) >= 500:  # don’t fetch your whole catalog every time
+        break
+
+    time.sleep(2)
 
 print(f"Your store products fetched: {len(your_products)}")
-
-# Create a dict for fast lookup by handle
 your_products_dict = {p['handle']: p for p in your_products}
 
 # -------------------------------
-# SYNC PRODUCTS
+# SYNC PRODUCTS (CREATE/UPDATE)
 # -------------------------------
 print("\n=== Syncing Products ===")
 for supplier_product in supplier_products:
@@ -121,23 +126,25 @@ for supplier_product in supplier_products:
     }
 
     if handle in your_products_dict:
-        # Update existing product
+        # Update
         product_id = your_products_dict[handle]['id']
         try:
-            r = requests.put(f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=product_data)
+            r = requests.put(f"{SHOP_URL}/products/{product_id}.json",
+                             headers=shopify_headers, json=product_data)
             r.raise_for_status()
             print(f"Updated: {handle}")
         except Exception as e:
             print(f"Error updating {handle}: {e}")
     else:
-        # Create new product
+        # Create
         try:
-            r = requests.post(f"{SHOP_URL}/products.json", headers=shopify_headers, json=product_data)
+            r = requests.post(f"{SHOP_URL}/products.json",
+                              headers=shopify_headers, json=product_data)
             r.raise_for_status()
             print(f"Created: {handle}")
         except Exception as e:
             print(f"Error creating {handle}: {e}")
 
-    time.sleep(2)  # delay between each create/update
+    time.sleep(PER_REQUEST_DELAY)
 
-print("\n✅ Sync complete!")
+print("\n✅ Sync complete for this batch!")
