@@ -3,7 +3,7 @@ name: Sync Products
 on:
   workflow_dispatch:   # allow manual runs
   schedule:
-    - cron: "*/30 * * * *"   # every 30 minutes
+    - cron: "0 * * * *"   # every hour, on the hour
 
 concurrency:
   group: "sync-products"
