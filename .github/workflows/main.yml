@@ -7,12 +7,16 @@ on:
 
 concurrency:
   group: "sync-products"
-  cancel-in-progress: false   # don't cancel previous run
+  cancel-in-progress: false
 
 jobs:
-  sync:
+  # -----------------------
+  # TEST sync - fetch 100
+  # -----------------------
+  test-sync:
+    if: github.event_name == 'workflow_dispatch'   # only runs if triggered manually
     runs-on: ubuntu-latest
-    timeout-minutes: 360   # up to 6 hours if needed
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -26,7 +30,35 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Run sync script
+      - name: Run TEST sync (100 items)
+        env:
+          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_TOKEN: ${{ secrets.SHOPIFY_TOKEN }}
+          SUPPLIER_API_URL: ${{ secrets.SUPPLIER_API_URL }}
+          SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
+        run: python sync.py --limit 100
+
+  # -----------------------
+  # FULL sync - hourly
+  # -----------------------
+  full-sync:
+    if: github.event_name == 'schedule'   # only runs on cron
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run FULL sync
         env:
           SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
           SHOPIFY_TOKEN: ${{ secrets.SHOPIFY_TOKEN }}
