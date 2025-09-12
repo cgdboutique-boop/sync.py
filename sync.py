@@ -1,6 +1,7 @@
 import os
 import requests
 import time
+import argparse
 
 # -------------------------------
 # CONFIG (from GitHub secrets)
@@ -48,10 +49,10 @@ def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     return None
 
 # -------------------------------
-# FETCH SUPPLIER PRODUCTS (batch)
+# FETCH SUPPLIER PRODUCTS
 # -------------------------------
-def fetch_supplier_products(limit=100):
-    url = f"{SUPPLIER_API_URL}?limit={limit}"
+def fetch_supplier_products(limit=None):
+    url = f"{SUPPLIER_API_URL}?limit={limit or 100}"
     r = request_with_retry("GET", url, headers=supplier_headers)
     if r is None:
         print("❌ Failed to fetch supplier products.")
@@ -59,47 +60,61 @@ def fetch_supplier_products(limit=100):
     return r.json().get("products", [])
 
 # -------------------------------
-# FETCH SHOPIFY PRODUCTS (batch)
+# SYNC PRODUCTS
 # -------------------------------
-def fetch_shopify_products(limit=100):
-    url = f"{SHOP_URL}/products.json?limit={limit}"
-    r = request_with_retry("GET", url, headers=shopify_headers)
-    if r is None:
-        print("❌ Failed to fetch Shopify products.")
-        return []
-    return r.json().get("products", [])
+def sync_products(limit=None):
+    print(f"=== Starting supplier sync (limit={limit or 'ALL'}) ===")
+    supplier_products = fetch_supplier_products(limit=limit)
+
+    if not supplier_products:
+        print("❌ No products fetched from supplier.")
+        return
+
+    # Fetch existing Shopify products (first 250 only for now)
+    r = request_with_retry("GET", f"{SHOP_URL}/products.json?limit=250", headers=shopify_headers)
+    shopify_products = r.json().get("products", []) if r else []
+    existing_dict = {p['handle']: p for p in shopify_products}
+
+    processed = 0
+    for sp in supplier_products:
+        # Pick identifier priority: SKU → handle → title
+        handle = sp.get("sku") or sp.get("handle") or sp.get("title")
+        if not handle:
+            print(f"⚠️ Skipping product with no identifier: {sp}")
+            continue
+
+        product_data = {
+            "product": {
+                "title": sp.get("title", ""),
+                "body_html": sp.get("body_html", ""),
+                "vendor": sp.get("vendor", ""),
+                "product_type": sp.get("product_type", ""),
+                "tags": sp.get("tags", ""),
+                "handle": handle
+            }
+        }
+
+        if handle in existing_dict:
+            product_id = existing_dict[handle]["id"]
+            r = request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=product_data)
+            if r:
+                print(f"✅ Updated: {handle}")
+        else:
+            r = request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json=product_data)
+            if r:
+                print(f"✨ Created: {handle}")
+
+        processed += 1
+        time.sleep(1)  # slow down requests
+
+    print(f"\n✅ Sync complete. {processed} products processed.")
 
 # -------------------------------
-# MATCH PRODUCT (SKU > Handle > Title/Desc)
+# MAIN
 # -------------------------------
-def match_product(sp, shopify_products):
-    sp_sku = None
-    if sp.get("variants"):
-        sp_sku = sp["variants"][0].get("sku")
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--limit", type=int, help="Limit number of supplier products to sync")
+    args = parser.parse_args()
 
-    sp_handle = sp.get("handle", "")
-    sp_title = sp.get("title", "").lower()
-    sp_body = (sp.get("body_html", "") or "").lower()
-
-    for p in shopify_products:
-        # 1. Match SKU
-        for v in p.get("variants", []):
-            if sp_sku and v.get("sku") == sp_sku:
-                return p
-        # 2. Match handle
-        if sp_handle and p.get("handle") == sp_handle:
-            return p
-        # 3. Match by title/body (loose check)
-        if sp_title and sp_title in p.get("title", "").lower():
-            return p
-        if sp_body and sp_body[:40] in (p.get("body_html", "") or "").lower():
-            return p
-    return None
-
-# -------------------------------
-# SYNC SUPPLIER PRODUCT
-# -------------------------------
-def sync_product(sp, shopify_products):
-    existing = match_product(sp, shopify_products)
-
-    handle = sp.get("handle", f"sku-{sp.get('variants',[{}])[0].get('sku','no-handle
+    sync_products(limit=args.limit)
