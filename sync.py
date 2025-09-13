@@ -21,21 +21,16 @@ shopify_headers = {
     "X-Shopify-Access-Token": SHOPIFY_TOKEN,
     "Content-Type": "application/json"
 }
-
-# Two possible header styles for supplier
-supplier_headers_shopify = {
-    "X-Shopify-Access-Token": SUPPLIER_TOKEN,
-    "Content-Type": "application/json"
-}
-supplier_headers_bearer = {
+supplier_headers = {
     "Authorization": f"Bearer {SUPPLIER_TOKEN}",
     "Content-Type": "application/json"
 }
 
 # -------------------------------
-# HELPER FUNCTION
+# HELPER FUNCTIONS
 # -------------------------------
 def request_with_retry(method, url, headers=None, json=None, max_retries=5):
+    """Retry API requests with exponential backoff on failure or rate limit"""
     retry_delay = 2
     for attempt in range(max_retries):
         try:
@@ -55,78 +50,93 @@ def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     return None
 
 # -------------------------------
-# TRY SUPPLIER AUTH
+# FETCH SUPPLIER PRODUCTS
 # -------------------------------
 def fetch_supplier_products(limit=100):
+    print(f"=== Starting supplier sync (limit={limit}) ===")
     url = f"{SUPPLIER_API_URL}?limit={limit}"
-
-    # Try Shopify-style headers first
-    print("🔎 Trying supplier with Shopify-style headers...")
-    r = request_with_retry("GET", url, headers=supplier_headers_shopify)
-    if r and r.status_code == 200:
-        print("✅ Supplier auth worked with X-Shopify-Access-Token")
-        return r.json().get("products", [])
-
-    # Try Bearer-style headers
-    print("🔎 Shopify headers failed. Trying Bearer token...")
-    r = request_with_retry("GET", url, headers=supplier_headers_bearer)
-    if r and r.status_code == 200:
-        print("✅ Supplier auth worked with Bearer token")
-        return r.json().get("products", [])
-
-    print("❌ Both auth methods failed for supplier API.")
-    return []
+    r = request_with_retry("GET", url, headers=supplier_headers)
+    if r is None:
+        print("❌ Failed to fetch supplier products.")
+        return []
+    data = r.json()
+    return data.get("products", [])
 
 # -------------------------------
-# SYNC PRODUCTS
+# CHECK SHOPIFY EXISTING PRODUCTS
+# -------------------------------
+def get_shopify_products():
+    products = []
+    url = f"{SHOP_URL}/products.json?limit=250"
+    r = request_with_retry("GET", url, headers=shopify_headers)
+    if r:
+        products = r.json().get("products", [])
+    return {p.get('variants', [{}])[0].get('sku', ''): p for p in products}
+
+# -------------------------------
+# PROCESS AND SYNC PRODUCTS
 # -------------------------------
 def sync_products(limit=100):
-    print(f"=== Starting supplier sync (limit={limit}) ===")
     supplier_products = fetch_supplier_products(limit=limit)
     if not supplier_products:
         print("❌ No products fetched from supplier.")
         return
 
-    # Fetch Shopify products
-    shopify_products = request_with_retry("GET", f"{SHOP_URL}/products.json?limit=250", headers=shopify_headers)
-    if not shopify_products:
-        print("❌ Failed to fetch Shopify products.")
-        return
-    your_products = shopify_products.json().get("products", [])
-    existing_handles = {p['handle']: p for p in your_products}
+    existing_products = get_shopify_products()
+    total_processed = 0
 
-    # Process supplier products
     for sp in supplier_products:
-        handle = sp.get("handle") or f"sku-{sp.get('sku', 'unknown')}"
-        if not handle:
-            print("⚠️ Skipping product with no handle or sku")
+        sku = sp.get("variants", [{}])[0].get("sku", "").strip()
+        handle = sp.get("handle", "").strip()
+        title = sp.get("title", "").strip()
+
+        if not sku and not handle and not title:
+            print("⚠️ Skipping product with no SKU, handle, or title")
             continue
+
+        # Check for existing by SKU -> handle -> title
+        existing = None
+        if sku and sku in existing_products:
+            existing = existing_products[sku]
+        elif handle:
+            existing = next((p for p in existing_products.values() if p['handle'] == handle), None)
+        elif title:
+            existing = next((p for p in existing_products.values() if p['title'] == title), None)
 
         product_data = {
             "product": {
-                "title": sp.get("title", ""),
+                "title": title,
                 "body_html": sp.get("body_html", ""),
                 "vendor": sp.get("vendor", ""),
                 "product_type": sp.get("product_type", ""),
                 "tags": sp.get("tags", ""),
-                "handle": handle
+                "handle": handle,
+                "variants": sp.get("variants", []),
+                "images": sp.get("images", [])
             }
         }
 
-        if handle in existing_handles:
-            product_id = existing_handles[handle]["id"]
-            request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=product_data)
-            print(f"🔄 Updated: {handle}")
+        if existing:
+            product_id = existing["id"]
+            r = request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=product_data)
+            if r:
+                print(f"Updated: {handle} (SKU: {sku})")
+            else:
+                print(f"❌ Failed to update: {handle} (SKU: {sku})")
         else:
-            request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json=product_data)
-            print(f"✨ Created: {handle}")
+            r = request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json=product_data)
+            if r:
+                print(f"Created: {handle} (SKU: {sku})")
+            else:
+                print(f"❌ Failed to create: {handle} (SKU: {sku})")
 
-        time.sleep(1)
+        total_processed += 1
+        time.sleep(1)  # Slow down requests
 
-    print("\n✅ Sync completed.")
+    print(f"\n✅ Completed sync. Total products processed: {total_processed}")
 
 # -------------------------------
-# RUN
+# RUN SYNC
 # -------------------------------
 if __name__ == "__main__":
-    sync_products(limit=100)
+    sync_products(limit=100)  # Pull 100 products for testing
