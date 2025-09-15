@@ -18,14 +18,14 @@ shopify_headers = {
 }
 
 # -------------------------------
-# HELPER FUNCTION
+# HELPER FUNCTION: retry requests
 # -------------------------------
 def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     retry_delay = 2
     for attempt in range(max_retries):
         try:
             response = requests.request(method, url, headers=headers, json=json)
-            if response.status_code in [429, 401]:
+            if response.status_code in [429, 500, 502, 503, 504]:
                 wait = int(response.headers.get("Retry-After", retry_delay))
                 print(f"{response.status_code} error. Retrying in {wait}s...")
                 time.sleep(wait)
@@ -42,31 +42,37 @@ def request_with_retry(method, url, headers=None, json=None, max_retries=5):
 # -------------------------------
 # SYNC SINGLE PRODUCT
 # -------------------------------
-def sync_single_product():
+def sync_product():
     handle = "2000133"
     title = "Ain't No Daddy Like The One I Got 2PSC Outfit #2000133"
     body_html = "Ain't No Daddy Like The One I Got 2PSC Outfit"
-    
+    vendor = "THE BRAVE ONES CHILDRENS FASHION"
+    product_type = "Boys Summer"
+    tags = "Boys Summer, Christmas"
+
+    # Variants with proper option1 name/value
     variants = [
-        {"option1": "6-12M", "sku": "2000133-1", "inventory_quantity": 5, "price": 220},
-        {"option1": "12-18M", "sku": "2000133-2", "inventory_quantity": 5, "price": 220},
-        {"option1": "18-24M", "sku": "2000133-3", "inventory_quantity": 5, "price": 220},
+        {"option1": "6-12M", "sku": "2000133", "inventory_quantity": 5, "price": 220},
+        {"option1": "12-18M", "sku": "2000133", "inventory_quantity": 5, "price": 220},
+        {"option1": "18-24M", "sku": "2000133", "inventory_quantity": 5, "price": 220},
     ]
-    
+
+    # Images
     images = [
         {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/image1.jpg?v=1694862572", "position": 1},
         {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/image2.jpg?v=1694862571", "position": 2},
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/image3.jpg?v=1694862570", "position": 3},
+        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/image3.jpg?v=1694862570", "position": 3}
     ]
-    
+
     product_data = {
         "product": {
             "title": title,
             "body_html": body_html,
-            "vendor": "THE BRAVE ONES CHILDRENS FASHION",
-            "product_type": "Boys Summer",
-            "tags": "Boys Summer, Christmas",
+            "vendor": vendor,
+            "product_type": product_type,
+            "tags": tags,
             "handle": handle,
+            "options": [{"name": "Size"}],  # required for variants
             "variants": variants,
             "images": images
         }
@@ -94,4 +100,4 @@ def sync_single_product():
 # RUN
 # -------------------------------
 if __name__ == "__main__":
-    sync_single_product()
+    sync_product()
