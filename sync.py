@@ -3,29 +3,35 @@ import requests
 import time
 
 # -------------------------------
-# CONFIG (from GitHub secrets)
+# CONFIGURATION
 # -------------------------------
 SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")
 SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
+SUPPLIER_API_URL = os.environ.get("SUPPLIER_API_URL")
+SUPPLIER_API_TOKEN = os.environ.get("SUPPLIER_API_TOKEN")
 
-if not SHOPIFY_STORE or not SHOPIFY_TOKEN:
-    raise ValueError("SHOPIFY_STORE or SHOPIFY_TOKEN is not set!")
+if not all([SHOPIFY_STORE, SHOPIFY_TOKEN, SUPPLIER_API_URL, SUPPLIER_API_TOKEN]):
+    raise ValueError("Missing environment variables!")
 
 SHOP_URL = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2025-07"
 shopify_headers = {
     "X-Shopify-Access-Token": SHOPIFY_TOKEN,
     "Content-Type": "application/json"
 }
+supplier_headers = {
+    "Authorization": f"Bearer {SUPPLIER_API_TOKEN}",
+    "Content-Type": "application/json"
+}
 
 # -------------------------------
-# HELPER FUNCTION
+# HELPER: Request with Retry
 # -------------------------------
 def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     retry_delay = 2
     for attempt in range(max_retries):
         try:
             response = requests.request(method, url, headers=headers, json=json)
-            if response.status_code in [429, 401]:
+            if response.status_code in [429, 401, 422]:
                 wait = int(response.headers.get("Retry-After", retry_delay))
                 print(f"{response.status_code} error. Retrying in {wait}s...")
                 time.sleep(wait)
@@ -40,65 +46,97 @@ def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     return None
 
 # -------------------------------
-# SYNC PRODUCT 2000133
+# FETCH: Supplier Products
 # -------------------------------
-def sync_product_2000133():
-    handle = "2000133"
-    title = "Ain't No Daddy Like The One I Got 2PSC Outfit #2000133"
-    body_html = "Ain't No Daddy Like The One I Got 2PSC Outfit"
-    vendor = "THE BRAVE ONES CHILDRENS FASHION"
-    product_type = "Boys Summer"
-    tags = "Boys Summer, Christmas"
+def fetch_all_supplier_products():
+    url = f"{SUPPLIER_API_URL}/products"
+    r = request_with_retry("GET", url, headers=supplier_headers)
+    return r.json().get("products", []) if r else []
 
-    # Variants from supplier
-    variants = [
-        {"option1": "6-12M", "sku": "2000133", "inventory_quantity": 5, "price": 220},
-        {"id": 44481333395702, "option1": "12-18M", "sku": "2000133", "inventory_quantity": 90, "price": 220},
-        {"id": 44481333428470, "option1": "18-24M", "sku": "2000133", "inventory_quantity": 100, "price": 220}
-    ]
-
-    # Images linked to variants
-    images = [
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/6-12M_image.png", "position": 1, "variant_ids": []},
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/12-18M_image.png", "position": 2, "variant_ids": [44481333395702]},
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/18-24M_image.png", "position": 3, "variant_ids": [44481333428470]},
-    ]
-
-    # Check if product exists
-    r = request_with_retry("GET", f"{SHOP_URL}/products.json?handle={handle}", headers=shopify_headers)
-    existing_products = r.json().get("products", []) if r else []
-
-    product_data = {
+# -------------------------------
+# MAP: Supplier → Shopify Format
+# -------------------------------
+def map_supplier_to_shopify(supplier_product):
+    return {
         "product": {
-            "title": title,
-            "body_html": body_html,
-            "vendor": vendor,
-            "product_type": product_type,
-            "tags": tags,
-            "handle": handle,
-            "variants": variants,
-            "images": images
+            "title": supplier_product["title"],
+            "body_html": supplier_product.get("description", ""),
+            "vendor": supplier_product.get("vendor", "Unknown"),
+            "product_type": supplier_product.get("type", ""),
+            "tags": ", ".join(supplier_product.get("tags", [])),
+            "handle": supplier_product["handle"],
+            "variants": [
+                {
+                    "option1": v["size"],
+                    "sku": v["sku"],
+                    "inventory_management": "shopify",
+                    "inventory_quantity": v["stock"],
+                    "price": v["price"]
+                } for v in supplier_product.get("variants", [])
+            ],
+            "images": [
+                {
+                    "src": img["url"],
+                    "position": idx + 1
+                } for idx, img in enumerate(supplier_product.get("images", []))
+            ]
         }
     }
 
-    if existing_products:
-        product_id = existing_products[0]["id"]
-        print(f"Updating product {handle} (ID: {product_id})...")
-        r = request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=product_data)
-        if r:
-            print(f"✅ Updated product: {handle}")
+# -------------------------------
+# INVENTORY: Location & Update
+# -------------------------------
+def get_location_id():
+    r = request_with_retry("GET", f"{SHOP_URL}/locations.json", headers=shopify_headers)
+    locations = r.json().get("locations", []) if r else []
+    return locations[0]["id"] if locations else None
+
+def update_inventory(inventory_item_id, location_id, quantity):
+    payload = {
+        "location_id": location_id,
+        "inventory_item_id": inventory_item_id,
+        "available": quantity
+    }
+    r = request_with_retry("POST", f"{SHOP_URL}/inventory_levels/set.json", headers=shopify_headers, json=payload)
+    return r
+
+# -------------------------------
+# SYNC: All Products
+# -------------------------------
+def sync_all_products():
+    location_id = get_location_id()
+    if not location_id:
+        print("❌ Could not retrieve location ID.")
+        return
+
+    supplier_products = fetch_all_supplier_products()
+    for sp in supplier_products:
+        handle = sp["handle"]
+        product_data = map_supplier_to_shopify(sp)
+
+        r = request_with_retry("GET", f"{SHOP_URL}/products.json?handle={handle}", headers=shopify_headers)
+        existing_products = r.json().get("products", []) if r else []
+
+        if existing_products:
+            product_id = existing_products[0]["id"]
+            r = request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=product_data)
+            print(f"✅ Updated product: {handle}" if r else f"❌ Failed to update product: {handle}")
         else:
-            print(f"❌ Failed to update product: {handle}")
-    else:
-        print(f"Creating new product {handle}...")
-        r = request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json=product_data)
+            r = request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json=product_data)
+            print(f"✅ Created product: {handle}" if r else f"❌ Failed to create product: {handle}")
+
+        # Update inventory for each variant
         if r:
-            print(f"✅ Created product: {handle}")
-        else:
-            print(f"❌ Failed to create product: {handle}")
+            product = r.json().get("product", {})
+            for variant in product.get("variants", []):
+                inventory_item_id = variant.get("inventory_item_id")
+                matching_variant = next((v for v in product_data["product"]["variants"] if v["sku"] == variant["sku"]), None)
+                quantity = matching_variant.get("inventory_quantity") if matching_variant else None
+                if inventory_item_id and quantity is not None:
+                    update_inventory(inventory_item_id, location_id, quantity)
 
 # -------------------------------
 # RUN
 # -------------------------------
 if __name__ == "__main__":
-    sync_product_2000133()
+    sync_all_products()
