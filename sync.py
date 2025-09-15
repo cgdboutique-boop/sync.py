@@ -18,14 +18,14 @@ shopify_headers = {
 }
 
 # -------------------------------
-# HELPER FUNCTION: retry requests
+# HELPER FUNCTION
 # -------------------------------
 def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     retry_delay = 2
     for attempt in range(max_retries):
         try:
             response = requests.request(method, url, headers=headers, json=json)
-            if response.status_code in [429, 500, 502, 503, 504]:
+            if response.status_code in [429, 401]:
                 wait = int(response.headers.get("Retry-After", retry_delay))
                 print(f"{response.status_code} error. Retrying in {wait}s...")
                 time.sleep(wait)
@@ -40,9 +40,9 @@ def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     return None
 
 # -------------------------------
-# SYNC SINGLE PRODUCT
+# SYNC PRODUCT 2000133
 # -------------------------------
-def sync_product():
+def sync_product_2000133():
     handle = "2000133"
     title = "Ain't No Daddy Like The One I Got 2PSC Outfit #2000133"
     body_html = "Ain't No Daddy Like The One I Got 2PSC Outfit"
@@ -50,19 +50,52 @@ def sync_product():
     product_type = "Boys Summer"
     tags = "Boys Summer, Christmas"
 
-    # Variants with proper option1 name/value
+    # Variant details using exact Shopify variant IDs
     variants = [
-        {"option1": "6-12M", "sku": "2000133", "inventory_quantity": 5, "price": 220},
-        {"option1": "12-18M", "sku": "2000133", "inventory_quantity": 5, "price": 220},
-        {"option1": "18-24M", "sku": "2000133", "inventory_quantity": 5, "price": 220},
+        {
+            "id": 44481333395702,  # 12-18M
+            "option1": "12-18M",
+            "sku": "2000133-12-18M",
+            "inventory_quantity": 5,
+            "price": 220
+        },
+        {
+            "id": 44481333428470,  # 18-24M
+            "option1": "18-24M",
+            "sku": "2000133-18-24M",
+            "inventory_quantity": 5,
+            "price": 220
+        },
+        {
+            "option1": "6-12M",  # Will create if missing
+            "sku": "2000133-6-12M",
+            "inventory_quantity": 5,
+            "price": 220
+        }
     ]
 
-    # Images
+    # Image mapping (link each variant to the correct image position)
     images = [
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/image1.jpg?v=1694862572", "position": 1},
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/image2.jpg?v=1694862571", "position": 2},
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/image3.jpg?v=1694862570", "position": 3}
+        {
+            "src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/12-18M_image.png",
+            "position": 1,
+            "variant_ids": [44481333395702]
+        },
+        {
+            "src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/18-24M_image.png",
+            "position": 2,
+            "variant_ids": [44481333428470]
+        },
+        {
+            "src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/6-12M_image.png",
+            "position": 3,
+            "variant_ids": []  # will link automatically if variant created
+        }
     ]
+
+    # Check if product exists
+    r = request_with_retry("GET", f"{SHOP_URL}/products.json?handle={handle}", headers=shopify_headers)
+    existing_products = r.json().get("products", []) if r else []
 
     product_data = {
         "product": {
@@ -72,32 +105,27 @@ def sync_product():
             "product_type": product_type,
             "tags": tags,
             "handle": handle,
-            "options": [{"name": "Size"}],  # required for variants
             "variants": variants,
             "images": images
         }
     }
 
-    # Check if product exists
-    r = request_with_retry("GET", f"{SHOP_URL}/products.json?handle={handle}", headers=shopify_headers)
-    existing_products = r.json().get("products", []) if r else []
-
     if existing_products:
         product_id = existing_products[0]["id"]
-        r = request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=product_data)
+        r = request_with_retry(f"PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=product_data)
         if r:
             print(f"✅ Updated product: {handle}")
         else:
-            print(f"❌ Failed to update: {handle}")
+            print(f"❌ Failed to update product: {handle}")
     else:
         r = request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json=product_data)
         if r:
             print(f"✅ Created product: {handle}")
         else:
-            print(f"❌ Failed to create: {handle}")
+            print(f"❌ Failed to create product: {handle}")
 
 # -------------------------------
 # RUN
 # -------------------------------
 if __name__ == "__main__":
-    sync_product()
+    sync_product_2000133()
