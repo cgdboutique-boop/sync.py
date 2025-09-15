@@ -1,4 +1,5 @@
 import os
+import sys
 import requests
 import time
 
@@ -8,7 +9,7 @@ import time
 SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")
 SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
 SUPPLIER_API_URL = os.environ.get("SUPPLIER_API_URL")
-SUPPLIER_API_TOKEN = os.environ.get("SUPPLIER_API_TOKEN")
+SUPPLIER_API_TOKEN = os.environ.get("SUPPLIER_TOKEN")  # matches your workflow
 
 if not all([SHOPIFY_STORE, SHOPIFY_TOKEN, SUPPLIER_API_URL, SUPPLIER_API_TOKEN]):
     raise ValueError("Missing environment variables!")
@@ -103,13 +104,16 @@ def update_inventory(inventory_item_id, location_id, quantity):
 # -------------------------------
 # SYNC: All Products
 # -------------------------------
-def sync_all_products():
+def sync_all_products(limit=None):
     location_id = get_location_id()
     if not location_id:
         print("❌ Could not retrieve location ID.")
         return
 
     supplier_products = fetch_all_supplier_products()
+    if limit:
+        supplier_products = supplier_products[:limit]
+
     for sp in supplier_products:
         handle = sp["handle"]
         product_data = map_supplier_to_shopify(sp)
@@ -136,7 +140,14 @@ def sync_all_products():
                     update_inventory(inventory_item_id, location_id, quantity)
 
 # -------------------------------
-# RUN
+# MAIN ENTRY POINT
 # -------------------------------
 if __name__ == "__main__":
-    sync_all_products()
+    limit = None
+    if "--limit" in sys.argv:
+        try:
+            limit_index = sys.argv.index("--limit") + 1
+            limit = int(sys.argv[limit_index])
+        except (IndexError, ValueError):
+            print("⚠️ Invalid limit value. Ignoring.")
+    sync_all_products(limit=limit)
