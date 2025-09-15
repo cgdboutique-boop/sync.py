@@ -50,21 +50,51 @@ def sync_product_2000133():
     product_type = "Boys Summer"
     tags = "Boys Summer, Christmas"
 
-    # Variant details with exact Shopify IDs
+    # Variant details
     variants = [
-        {"id": 44481333362934, "option1": "6-12M", "sku": "2000133-6-12M", "price": 220},
-        {"id": 44481333395702, "option1": "12-18M", "sku": "2000133-12-18M", "price": 220},
-        {"id": 44481333428470, "option1": "18-24M", "sku": "2000133-18-24M", "price": 220},
+        {
+            "id": 44481333362934,  # 6-12M
+            "option1": "6-12M",
+            "sku": "2000133",
+            "inventory_management": "shopify",
+            "inventory_quantity": 5,
+            "price": "220"
+        },
+        {
+            "id": 44481333395702,  # 12-18M
+            "option1": "12-18M",
+            "sku": "2000133",
+            "inventory_management": "shopify",
+            "inventory_quantity": 5,
+            "price": "220"
+        },
+        {
+            "id": 44481333428470,  # 18-24M
+            "option1": "18-24M",
+            "sku": "2000133",
+            "inventory_management": "shopify",
+            "inventory_quantity": 5,
+            "price": "220"
+        }
     ]
 
-    # Images linked to correct variants
+    # Image mapping
     images = [
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/6-12M_image.png",
-         "position": 1, "variant_ids": [44481333362934]},
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/12-18M_image.png",
-         "position": 2, "variant_ids": [44481333395702]},
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/18-24M_image.png",
-         "position": 3, "variant_ids": [44481333428470]},
+        {
+            "src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/6-12M_image.png",
+            "position": 1,
+            "variant_ids": [44481333362934]
+        },
+        {
+            "src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/12-18M_image.png",
+            "position": 2,
+            "variant_ids": [44481333395702]
+        },
+        {
+            "src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/18-24M_image.png",
+            "position": 3,
+            "variant_ids": [44481333428470]
+        }
     ]
 
     # Check if product exists
