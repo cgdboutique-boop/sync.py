@@ -14,13 +14,18 @@ SHOPIFY_TOKEN = os.environ["SHOPIFY_TOKEN"]
 SUPPLIER_API_URL = os.environ["SUPPLIER_API_URL"]
 SUPPLIER_TOKEN = os.environ["SUPPLIER_TOKEN"]
 
-# Fetch supplier product data
+# Headers for both stores
 supplier_headers = {
     "X-Shopify-Access-Token": SUPPLIER_TOKEN,
     "Content-Type": "application/json"
 }
-supplier_response = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
+shopify_headers = {
+    "X-Shopify-Access-Token": SHOPIFY_TOKEN,
+    "Content-Type": "application/json"
+}
 
+# Fetch supplier product data
+supplier_response = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
 if supplier_response.status_code != 200:
     print(f"❌ Failed to fetch supplier data: {supplier_response.status_code}")
     print(supplier_response.text)
@@ -31,15 +36,32 @@ products = supplier_data.get("products", [])
 if args.limit:
     products = products[:args.limit]
 
+success_count = 0
+skip_count = 0
+error_count = 0
+
 # Push each product to your store
 for product in products:
+    handle = product["handle"]
+
+    # Check if product already exists
+    check_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?handle={handle}"
+    check_response = requests.get(check_url, headers=shopify_headers)
+    existing = check_response.json().get("products", [])
+
+    if existing:
+        print(f"⚠️ Skipping existing product: {product['title']} (handle: {handle})")
+        skip_count += 1
+        continue
+
+    # Map product
     mapped_product = {
         "product": {
             "title": product["title"],
             "body_html": product["body_html"],
             "vendor": product["vendor"],
             "product_type": product.get("product_type", ""),
-            "handle": product["handle"],
+            "handle": handle,
             "tags": product.get("tags", ""),
             "status": product.get("status", "draft"),
             "variants": [
@@ -58,17 +80,20 @@ for product in products:
         }
     }
 
-    # Send to your store
-    url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
-    headers = {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": SHOPIFY_TOKEN
-    }
-
-    response = requests.post(url, headers=headers, data=json.dumps(mapped_product))
+    # Create product
+    create_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
+    response = requests.post(create_url, headers=shopify_headers, data=json.dumps(mapped_product))
 
     if response.status_code == 201:
         print(f"✅ Created: {product['title']}")
+        success_count += 1
     else:
         print(f"❌ Failed: {product['title']} ({response.status_code})")
         print(response.text)
+        error_count += 1
+
+# Summary
+print("\n📦 Sync Summary")
+print(f"✅ Created: {success_count}")
+print(f"⚠️ Skipped: {skip_count}")
+print(f"❌ Failed: {error_count}")
