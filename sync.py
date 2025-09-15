@@ -7,10 +7,9 @@ import time
 # -------------------------------
 SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")
 SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
-SHOPIFY_LOCATION_ID = os.environ.get("SHOPIFY_LOCATION_ID")  # you must set this in GitHub secrets!
 
-if not SHOPIFY_STORE or not SHOPIFY_TOKEN or not SHOPIFY_LOCATION_ID:
-    raise ValueError("SHOPIFY_STORE, SHOPIFY_TOKEN or SHOPIFY_LOCATION_ID is not set!")
+if not SHOPIFY_STORE or not SHOPIFY_TOKEN:
+    raise ValueError("SHOPIFY_STORE or SHOPIFY_TOKEN is not set!")
 
 SHOP_URL = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2025-07"
 shopify_headers = {
@@ -40,6 +39,21 @@ def request_with_retry(method, url, headers=None, json=None, max_retries=5):
             time.sleep(retry_delay)
             retry_delay *= 2
     return None
+
+# -------------------------------
+# GET SHOPIFY LOCATION ID
+# -------------------------------
+def get_shopify_location_id():
+    """Fetch the first active location_id from Shopify."""
+    r = request_with_retry("GET", f"{SHOP_URL}/locations.json", headers=shopify_headers)
+    if not r:
+        raise RuntimeError("❌ Could not fetch locations from Shopify.")
+    locations = r.json().get("locations", [])
+    if not locations:
+        raise RuntimeError("❌ No locations found in Shopify account.")
+    location_id = locations[0]["id"]
+    print(f"📦 Using Shopify location_id: {location_id}")
+    return location_id
 
 # -------------------------------
 # SYNC PRODUCT 2000133
@@ -114,12 +128,14 @@ def sync_product_2000133():
     # -------------------------------
     # Update inventory levels
     # -------------------------------
+    location_id = get_shopify_location_id()
+
     for v in supplier_variants:
         shopify_variant = next((sv for sv in new_product["variants"] if sv["sku"] == v["sku"]), None)
         if shopify_variant:
             inventory_item_id = shopify_variant["inventory_item_id"]
             payload = {
-                "location_id": SHOPIFY_LOCATION_ID,
+                "location_id": location_id,
                 "inventory_item_id": inventory_item_id,
                 "available": v["stock"]
             }
