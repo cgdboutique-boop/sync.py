@@ -25,7 +25,7 @@ def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     for attempt in range(max_retries):
         try:
             response = requests.request(method, url, headers=headers, json=json)
-            if response.status_code in [429, 401]:
+            if response.status_code in [429, 401, 422]:
                 wait = int(response.headers.get("Retry-After", retry_delay))
                 print(f"{response.status_code} error. Retrying in {wait}s...")
                 time.sleep(wait)
@@ -50,21 +50,24 @@ def sync_product_2000133():
     product_type = "Boys Summer"
     tags = "Boys Summer, Christmas"
 
-    # Variant details (using IDs provided)
+    # Variant details with exact Shopify IDs
     variants = [
-        {"id": 44481333362934, "option1": "6-12M", "sku": "2000133-6-12M", "inventory_quantity": 5, "price": 220},
-        {"id": 44481333395702, "option1": "12-18M", "sku": "2000133-12-18M", "inventory_quantity": 5, "price": 220},
-        {"id": 44481333428470, "option1": "18-24M", "sku": "2000133-18-24M", "inventory_quantity": 5, "price": 220},
+        {"id": 44481333362934, "option1": "6-12M", "sku": "2000133-6-12M", "price": 220},
+        {"id": 44481333395702, "option1": "12-18M", "sku": "2000133-12-18M", "price": 220},
+        {"id": 44481333428470, "option1": "18-24M", "sku": "2000133-18-24M", "price": 220},
     ]
 
-    # Image mapping
+    # Images linked to correct variants
     images = [
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/6-12M_image.png", "position": 1, "variant_ids": [44481333362934]},
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/12-18M_image.png", "position": 2, "variant_ids": [44481333395702]},
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/18-24M_image.png", "position": 3, "variant_ids": [44481333428470]},
+        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/6-12M_image.png",
+         "position": 1, "variant_ids": [44481333362934]},
+        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/12-18M_image.png",
+         "position": 2, "variant_ids": [44481333395702]},
+        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/18-24M_image.png",
+         "position": 3, "variant_ids": [44481333428470]},
     ]
 
-    # Fetch existing product
+    # Check if product exists
     r = request_with_retry("GET", f"{SHOP_URL}/products.json?handle={handle}", headers=shopify_headers)
     existing_products = r.json().get("products", []) if r else []
 
