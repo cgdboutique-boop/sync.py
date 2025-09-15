@@ -3,34 +3,18 @@ import requests
 import time
 
 # -------------------------------
-# CONFIG
+# CONFIG (from GitHub secrets)
 # -------------------------------
 SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")
 SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
-SUPPLIER_API_URL = os.environ.get("SUPPLIER_API_URL")  # e.g. https://supplier.com/api/products
-SUPPLIER_TOKEN = os.environ.get("SUPPLIER_TOKEN")
 
-if not SHOPIFY_STORE or not SHOPIFY_TOKEN or not SUPPLIER_API_URL:
-    raise ValueError("SHOPIFY_STORE, SHOPIFY_TOKEN, and SUPPLIER_API_URL must be set!")
+if not SHOPIFY_STORE or not SHOPIFY_TOKEN:
+    raise ValueError("SHOPIFY_STORE or SHOPIFY_TOKEN is not set!")
 
 SHOP_URL = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2025-07"
 shopify_headers = {
     "X-Shopify-Access-Token": SHOPIFY_TOKEN,
     "Content-Type": "application/json"
-}
-
-# -------------------------------
-# SUPPLIER HEADERS (adjust to your supplier)
-# Example options:
-# 1) X-Auth-Token
-# 2) Authorization: Bearer <token>
-# 3) Authorization: Token <token>
-# 4) No auth at all
-# -------------------------------
-SUPPLIER_HEADERS = {
-    # Replace this with your supplier's required header
-    "X-Auth-Token": SUPPLIER_TOKEN,
-    "Accept": "application/json"
 }
 
 # -------------------------------
@@ -41,9 +25,9 @@ def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     for attempt in range(max_retries):
         try:
             response = requests.request(method, url, headers=headers, json=json)
-            if response.status_code in [429, 401, 422]:
+            if response.status_code in [429, 401]:
                 wait = int(response.headers.get("Retry-After", retry_delay))
-                print(f"{response.status_code} from {url}. Retrying in {wait}s...")
+                print(f"{response.status_code} error. Retrying in {wait}s...")
                 time.sleep(wait)
                 retry_delay *= 2
                 continue
@@ -56,47 +40,32 @@ def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     return None
 
 # -------------------------------
-# FETCH SUPPLIER PRODUCT
+# SYNC PRODUCT 2000133
 # -------------------------------
-def fetch_supplier_product(sku):
-    """Fetch product data from supplier API."""
-    url = f"{SUPPLIER_API_URL}/{sku}"
-    r = request_with_retry("GET", url, headers=SUPPLIER_HEADERS)
-    if not r:
-        raise RuntimeError(f"❌ Failed to fetch supplier product {sku}")
-    return r.json()
+def sync_product_2000133():
+    handle = "2000133"
+    title = "Ain't No Daddy Like The One I Got 2PSC Outfit #2000133"
+    body_html = "Ain't No Daddy Like The One I Got 2PSC Outfit"
+    vendor = "THE BRAVE ONES CHILDRENS FASHION"
+    product_type = "Boys Summer"
+    tags = "Boys Summer, Christmas"
 
-# -------------------------------
-# GET SHOPIFY LOCATION
-# -------------------------------
-def get_shopify_location_id():
-    r = request_with_retry("GET", f"{SHOP_URL}/locations.json", headers=shopify_headers)
-    if not r:
-        raise RuntimeError("❌ Could not fetch Shopify locations")
-    locations = r.json().get("locations", [])
-    if not locations:
-        raise RuntimeError("❌ No Shopify locations found")
-    return locations[0]["id"]
+    # Variants from supplier
+    variants = [
+        {"option1": "6-12M", "sku": "2000133", "inventory_quantity": 5, "price": 220},
+        {"id": 44481333395702, "option1": "12-18M", "sku": "2000133", "inventory_quantity": 90, "price": 220},
+        {"id": 44481333428470, "option1": "18-24M", "sku": "2000133", "inventory_quantity": 100, "price": 220}
+    ]
 
-# -------------------------------
-# SYNC PRODUCT
-# -------------------------------
-def sync_product(sku):
-    # 1️⃣ Fetch supplier product
-    supplier_data = fetch_supplier_product(sku)
+    # Images linked to variants
+    images = [
+        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/6-12M_image.png", "position": 1, "variant_ids": []},
+        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/12-18M_image.png", "position": 2, "variant_ids": [44481333395702]},
+        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/18-24M_image.png", "position": 3, "variant_ids": [44481333428470]},
+    ]
 
-    # 2️⃣ Map supplier fields → Shopify
-    title = supplier_data.get("title", f"Product {sku}")
-    body_html = supplier_data.get("description", "")
-    vendor = supplier_data.get("vendor", "THE BRAVE ONES CHILDRENS FASHION")
-    product_type = supplier_data.get("category", "General")
-    tags = ",".join(supplier_data.get("tags", []))
-
-    supplier_variants = supplier_data.get("variants", [])
-    supplier_images = supplier_data.get("images", [])
-
-    # 3️⃣ Check if product exists in Shopify
-    r = request_with_retry("GET", f"{SHOP_URL}/products.json?handle={sku}", headers=shopify_headers)
+    # Check if product exists
+    r = request_with_retry("GET", f"{SHOP_URL}/products.json?handle={handle}", headers=shopify_headers)
     existing_products = r.json().get("products", []) if r else []
 
     product_data = {
@@ -106,72 +75,30 @@ def sync_product(sku):
             "vendor": vendor,
             "product_type": product_type,
             "tags": tags,
-            "handle": sku
+            "handle": handle,
+            "variants": variants,
+            "images": images
         }
     }
 
     if existing_products:
         product_id = existing_products[0]["id"]
-        print(f"🔄 Updating existing product {sku}")
+        print(f"Updating product {handle} (ID: {product_id})...")
         r = request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=product_data)
-        shop_product = r.json()["product"]
+        if r:
+            print(f"✅ Updated product: {handle}")
+        else:
+            print(f"❌ Failed to update product: {handle}")
     else:
-        print(f"➕ Creating new product {sku}")
-        product_data["product"]["variants"] = [
-            {"option1": v["option"], "sku": v["sku"], "price": v["price"], "inventory_management": "shopify"} for v in supplier_variants
-        ]
-        product_data["product"]["images"] = [{"src": img} for img in supplier_images]
+        print(f"Creating new product {handle}...")
         r = request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json=product_data)
-        shop_product = r.json()["product"]
-
-    # 4️⃣ Update inventory for each variant
-    location_id = get_shopify_location_id()
-    shop_variants = {v["sku"]: v for v in shop_product["variants"]}
-
-    for sv in supplier_variants:
-        sku_code = sv["sku"]
-        stock = sv.get("stock", 0)
-        shop_v = shop_variants.get(sku_code)
-        if not shop_v:
-            print(f"⚠️ Shopify variant missing for {sku_code}")
-            continue
-        inventory_item_id = shop_v["inventory_item_id"]
-        payload = {
-            "location_id": location_id,
-            "inventory_item_id": inventory_item_id,
-            "available": stock
-        }
-        request_with_retry("POST", f"{SHOP_URL}/inventory_levels/set.json", headers=shopify_headers, json=payload)
-        print(f"   ✅ Stock updated for {sku_code} → {stock}")
-
-    # 5️⃣ Update variant prices if changed
-    for sv in supplier_variants:
-        sku_code = sv["sku"]
-        price = sv["price"]
-        shop_v = shop_variants.get(sku_code)
-        if shop_v and str(shop_v.get("price")) != str(price):
-            request_with_retry(
-                "PUT",
-                f"{SHOP_URL}/variants/{shop_v['id']}.json",
-                headers=shopify_headers,
-                json={"variant": {"id": shop_v["id"], "price": price}}
-            )
-            print(f"   💰 Price updated for {sku_code} → {price}")
-
-    # 6️⃣ Update images if needed
-    if supplier_images:
-        request_with_retry(
-            "PUT",
-            f"{SHOP_URL}/products/{shop_product['id']}.json",
-            headers=shopify_headers,
-            json={"product": {"images": [{"src": img} for img in supplier_images]}}
-        )
-        print(f"   🖼️ Images updated for {sku}")
-
-    print(f"✅ Finished syncing product {sku}")
+        if r:
+            print(f"✅ Created product: {handle}")
+        else:
+            print(f"❌ Failed to create product: {handle}")
 
 # -------------------------------
 # RUN
 # -------------------------------
 if __name__ == "__main__":
-    sync_product("2000133")
+    sync_product_2000133()
