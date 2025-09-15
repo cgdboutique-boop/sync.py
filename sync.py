@@ -40,27 +40,21 @@ def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     return None
 
 # -------------------------------
-# SYNC SINGLE PRODUCT
+# SYNC PRODUCT WITH VARIANTS AND IMAGES
 # -------------------------------
-def sync_single_product():
+def sync_product():
     handle = "2000133"
     title = "Ain't No Daddy Like The One I Got 2PSC Outfit #2000133"
     body_html = "Ain't No Daddy Like The One I Got 2PSC Outfit"
-
-    # Variants (single SKU, correct quantity)
+    
+    # Variants
     variants = [
-        {"option1": "6-12M", "sku": "#2000133", "price": 220, "inventory_quantity": 1, "inventory_management": "shopify"},
-        {"option1": "12-18M", "sku": "#2000133", "price": 220, "inventory_quantity": 3, "inventory_management": "shopify"},
-        {"option1": "18-24M", "sku": "#2000133", "price": 220, "inventory_quantity": 5, "inventory_management": "shopify"},
+        {"option1": "6-12M", "sku": "2000133-1", "inventory_quantity": 1, "price": 220},
+        {"option1": "12-18M", "sku": "2000133-2", "inventory_quantity": 2, "price": 220},
+        {"option1": "18-24M", "sku": "2000133-3", "inventory_quantity": 3, "price": 220},
     ]
-
-    # Images
-    images = [
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/image1.jpg?v=1694862572", "position": 1},
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/image2.jpg?v=1694862571", "position": 2},
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/image3.jpg?v=1694862570", "position": 3},
-    ]
-
+    
+    # Product data
     product_data = {
         "product": {
             "title": title,
@@ -69,8 +63,7 @@ def sync_single_product():
             "product_type": "Boys Summer",
             "tags": "Boys Summer, Christmas",
             "handle": handle,
-            "variants": variants,
-            "images": images
+            "variants": variants
         }
     }
 
@@ -84,16 +77,37 @@ def sync_single_product():
         if r:
             print(f"✅ Updated product: {handle}")
         else:
-            print(f"❌ Failed to update: {handle}")
+            print(f"❌ Failed to update product: {handle}")
     else:
         r = request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json=product_data)
         if r:
             print(f"✅ Created product: {handle}")
         else:
-            print(f"❌ Failed to create: {handle}")
+            print(f"❌ Failed to create product: {handle}")
+            return
+
+    # Get the latest product with variant IDs
+    r = request_with_retry("GET", f"{SHOP_URL}/products.json?handle={handle}", headers=shopify_headers)
+    product = r.json().get("products", [])[0]
+    product_id = product["id"]
+    variant_ids = {v["option1"]: v["id"] for v in product["variants"]}
+
+    # Images and linking to variants
+    images = [
+        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/image_6-12M.jpg", "position": 1, "variant_ids": [variant_ids["6-12M"]]},
+        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/image_12-18M.jpg", "position": 2, "variant_ids": [variant_ids["12-18M"]]},
+        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/image_18-24M.jpg", "position": 3, "variant_ids": [variant_ids["18-24M"]]},
+    ]
+
+    # Update product images
+    r = request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json={"product": {"images": images}})
+    if r:
+        print("✅ Images updated and linked to variants")
+    else:
+        print("❌ Failed to update images")
 
 # -------------------------------
 # RUN
 # -------------------------------
 if __name__ == "__main__":
-    sync_single_product()
+    sync_product()
