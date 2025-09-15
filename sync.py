@@ -1,18 +1,38 @@
 import os
 import json
 import requests
+import argparse
+
+# Parse optional --limit argument
+parser = argparse.ArgumentParser()
+parser.add_argument("--limit", type=int, default=None)
+args = parser.parse_args()
 
 # Load secrets from environment
-ACCESS_TOKEN = os.environ["SHOPIFY_ACCESS_TOKEN"]
 SHOPIFY_STORE = os.environ["SHOPIFY_STORE"]
+SHOPIFY_TOKEN = os.environ["SHOPIFY_TOKEN"]
+SUPPLIER_API_URL = os.environ["SUPPLIER_API_URL"]
+SUPPLIER_TOKEN = os.environ["SUPPLIER_TOKEN"]
 
-# Load supplier product data
-with open("supplier_products.json", "r", encoding="utf-8") as f:
-    supplier_data = json.load(f)
+# Fetch supplier product data
+supplier_headers = {
+    "X-Shopify-Access-Token": SUPPLIER_TOKEN,
+    "Content-Type": "application/json"
+}
+supplier_response = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
 
-# Loop through each product
-for product in supplier_data["products"]:
-    # Map supplier product to your store's format
+if supplier_response.status_code != 200:
+    print(f"❌ Failed to fetch supplier data: {supplier_response.status_code}")
+    print(supplier_response.text)
+    exit(1)
+
+supplier_data = supplier_response.json()
+products = supplier_data.get("products", [])
+if args.limit:
+    products = products[:args.limit]
+
+# Push each product to your store
+for product in products:
     mapped_product = {
         "product": {
             "title": product["title"],
@@ -38,18 +58,17 @@ for product in supplier_data["products"]:
         }
     }
 
-    # Send POST request to your Shopify store
+    # Send to your store
     url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
     headers = {
         "Content-Type": "application/json",
-        "X-Shopify-Access-Token": ACCESS_TOKEN
+        "X-Shopify-Access-Token": SHOPIFY_TOKEN
     }
 
     response = requests.post(url, headers=headers, data=json.dumps(mapped_product))
 
-    # Handle response
     if response.status_code == 201:
-        print(f"✅ Product '{product['title']}' created successfully.")
+        print(f"✅ Created: {product['title']}")
     else:
-        print(f"❌ Failed to create '{product['title']}': {response.status_code}")
+        print(f"❌ Failed: {product['title']} ({response.status_code})")
         print(response.text)
