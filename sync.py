@@ -7,9 +7,9 @@ import time
 # -------------------------------
 SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")
 SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
-LOCATION_ID = os.environ.get("SHOPIFY_LOCATION_ID")  # Required for inventory updates
+SHOPIFY_LOCATION_ID = os.environ.get("SHOPIFY_LOCATION_ID")  # For inventory updates
 
-if not SHOPIFY_STORE or not SHOPIFY_TOKEN or not LOCATION_ID:
+if not SHOPIFY_STORE or not SHOPIFY_TOKEN or not SHOPIFY_LOCATION_ID:
     raise ValueError("SHOPIFY_STORE, SHOPIFY_TOKEN, or SHOPIFY_LOCATION_ID is not set!")
 
 SHOP_URL = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2025-07"
@@ -19,7 +19,7 @@ shopify_headers = {
 }
 
 # -------------------------------
-# HELPER FUNCTION WITH RETRY
+# HELPER FUNCTION
 # -------------------------------
 def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     retry_delay = 2
@@ -41,7 +41,7 @@ def request_with_retry(method, url, headers=None, json=None, max_retries=5):
     return None
 
 # -------------------------------
-# SYNC SINGLE PRODUCT
+# SYNC PRODUCT 2000133
 # -------------------------------
 def sync_product_2000133():
     handle = "2000133"
@@ -51,28 +51,23 @@ def sync_product_2000133():
     product_type = "Boys Summer"
     tags = "Boys Summer, Christmas"
 
-    # Variant data with correct Shopify variant IDs
-    variants_data = [
-        {"id": 44481333362934, "option1": "6-12M", "sku": "2000133", "inventory_quantity": 5, "price": 220},
-        {"id": 44481333395702, "option1": "12-18M", "sku": "2000133", "inventory_quantity": 5, "price": 220},
-        {"id": 44481333428470, "option1": "18-24M", "sku": "2000133", "inventory_quantity": 5, "price": 220}
+    # Variants from supplier
+    variants = [
+        {"option1": "6-12M", "sku": "2000133", "price": 220},
+        {"option1": "12-18M", "sku": "2000133", "price": 220},
+        {"option1": "18-24M", "sku": "2000133", "price": 220}
     ]
 
-    # Images mapped to variant IDs
+    # Images linked to variants
     images = [
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/6-12M_image.png", "position": 1, "variant_ids": [44481333362934]},
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/12-18M_image.png", "position": 2, "variant_ids": [44481333395702]},
-        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/18-24M_image.png", "position": 3, "variant_ids": [44481333428470]}
+        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/6-12M_image.png", "position": 1, "variant_ids": []},
+        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/12-18M_image.png", "position": 2, "variant_ids": []},
+        {"src": "https://cdn.shopify.com/s/files/1/0551/4638/1501/files/18-24M_image.png", "position": 3, "variant_ids": []},
     ]
 
-    # -------------------------------
-    # 1️⃣ Get existing product
-    # -------------------------------
+    # Check if product exists
     r = request_with_retry("GET", f"{SHOP_URL}/products.json?handle={handle}", headers=shopify_headers)
-    if not r:
-        print("❌ Failed to fetch product")
-        return
-    existing_products = r.json().get("products", [])
+    existing_products = r.json().get("products", []) if r else []
 
     product_data = {
         "product": {
@@ -82,65 +77,48 @@ def sync_product_2000133():
             "product_type": product_type,
             "tags": tags,
             "handle": handle,
+            "variants": variants,
             "images": images
         }
     }
 
-    # -------------------------------
-    # 2️⃣ Create or update product
-    # -------------------------------
     if existing_products:
         product_id = existing_products[0]["id"]
+        print(f"Updating product {handle} (ID: {product_id})...")
         r = request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=product_data)
         if r:
-            print(f"✅ Updated product info: {handle}")
+            print(f"✅ Updated product: {handle}")
         else:
-            print(f"❌ Failed to update product info: {handle}")
+            print(f"❌ Failed to update product: {handle}")
     else:
+        print(f"Creating new product {handle}...")
         r = request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json=product_data)
         if r:
-            product_id = r.json()["product"]["id"]
             print(f"✅ Created product: {handle}")
         else:
             print(f"❌ Failed to create product: {handle}")
-            return
+        product_id = r.json()["product"]["id"] if r else None
 
-    # -------------------------------
-    # 3️⃣ Update variants (price)
-    # -------------------------------
-    for variant in variants_data:
-        variant_update = {"variant": {"id": variant["id"], "price": variant["price"]}}
-        r = request_with_retry("PUT", f"{SHOP_URL}/variants/{variant['id']}.json", headers=shopify_headers, json=variant_update)
+    # Update inventory for each variant
+    if product_id:
+        r = request_with_retry("GET", f"{SHOP_URL}/products/{product_id}/variants.json", headers=shopify_headers)
         if r:
-            print(f"✅ Updated price for variant {variant['option1']}")
-        else:
-            print(f"❌ Failed to update price for variant {variant['option1']}")
-
-    # -------------------------------
-    # 4️⃣ Update inventory levels
-    # -------------------------------
-    for variant in variants_data:
-        inventory_item_id = get_inventory_item_id(variant["id"])
-        if inventory_item_id:
-            inventory_payload = {
-                "location_id": int(LOCATION_ID),
-                "inventory_item_id": inventory_item_id,
-                "available": variant["inventory_quantity"]
-            }
-            r = request_with_retry("POST", f"{SHOP_URL}/inventory_levels/set.json", headers=shopify_headers, json=inventory_payload)
-            if r:
-                print(f"✅ Updated inventory for variant {variant['option1']}")
-            else:
-                print(f"❌ Failed to update inventory for variant {variant['option1']}")
-
-# -------------------------------
-# HELPER: get inventory_item_id for a variant
-# -------------------------------
-def get_inventory_item_id(variant_id):
-    r = request_with_retry("GET", f"{SHOP_URL}/variants/{variant_id}.json", headers=shopify_headers)
-    if r:
-        return r.json()["variant"]["inventory_item_id"]
-    return None
+            for variant in r.json().get("variants", []):
+                qty = 5
+                if variant["option1"] == "12-18M":
+                    qty = 90
+                elif variant["option1"] == "18-24M":
+                    qty = 100
+                inv_data = {
+                    "location_id": int(SHOPIFY_LOCATION_ID),
+                    "inventory_item_id": int(variant["inventory_item_id"]),
+                    "available": qty
+                }
+                r_inv = request_with_retry("POST", f"{SHOP_URL}/inventory_levels/set.json", headers=shopify_headers, json=inv_data)
+                if r_inv:
+                    print(f"✅ Updated inventory for variant {variant['option1']} to {qty}")
+                else:
+                    print(f"❌ Failed inventory update for variant {variant['option1']}")
 
 # -------------------------------
 # RUN
