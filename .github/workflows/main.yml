@@ -1,74 +1,67 @@
-import os
-import json
-import requests
-import argparse
+name: Sync Products
 
-# Parse optional --limit argument
-parser = argparse.ArgumentParser()
-parser.add_argument("--limit", type=int, default=None)
-args = parser.parse_args()
+on:
+  workflow_dispatch:   # Manual trigger
+  schedule:
+    - cron: "0 * * * *"   # Every hour on the hour
 
-# Load secrets from environment
-SHOPIFY_STORE = os.environ["SHOPIFY_STORE"]
-SHOPIFY_TOKEN = os.environ["SHOPIFY_TOKEN"]
-SUPPLIER_API_URL = os.environ["SUPPLIER_API_URL"]
-SUPPLIER_TOKEN = os.environ["SUPPLIER_TOKEN"]
+concurrency:
+  group: "sync-products"
+  cancel-in-progress: false
 
-# Fetch supplier product data
-supplier_headers = {
-    "X-Shopify-Access-Token": SUPPLIER_TOKEN,
-    "Content-Type": "application/json"
-}
-supplier_response = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
+jobs:
+  # -----------------------
+  # TEST sync - manual only
+  # -----------------------
+  test-sync:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
 
-if supplier_response.status_code != 200:
-    print(f"❌ Failed to fetch supplier data: {supplier_response.status_code}")
-    print(supplier_response.text)
-    exit(1)
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-supplier_data = supplier_response.json()
-products = supplier_data.get("products", [])
-if args.limit:
-    products = products[:args.limit]
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
 
-# Push each product to your store
-for product in products:
-    mapped_product = {
-        "product": {
-            "title": product["title"],
-            "body_html": product["body_html"],
-            "vendor": product["vendor"],
-            "product_type": product.get("product_type", ""),
-            "handle": product["handle"],
-            "tags": product.get("tags", ""),
-            "status": product.get("status", "draft"),
-            "variants": [
-                {
-                    "sku": variant.get("sku", ""),
-                    "price": variant.get("price", "0.00"),
-                    "option1": variant.get("option1", "Default Title"),
-                    "inventory_quantity": variant.get("inventory_quantity", 0)
-                }
-                for variant in product.get("variants", [])
-            ],
-            "images": [
-                {"src": image["src"]}
-                for image in product.get("images", [])
-            ]
-        }
-    }
+      - name: Install dependencies
+        run: pip install requests
 
-    # Send to your store
-    url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
-    headers = {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": SHOPIFY_TOKEN
-    }
+      - name: Run TEST sync (limit 100)
+        env:
+          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_TOKEN: ${{ secrets.SHOPIFY_TOKEN }}
+          SUPPLIER_API_URL: ${{ secrets.SUPPLIER_API_URL }}
+          SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
+        run: python sync.py --limit 100
 
-    response = requests.post(url, headers=headers, data=json.dumps(mapped_product))
+  # -----------------------
+  # FULL sync - hourly
+  # -----------------------
+  full-sync:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
 
-    if response.status_code == 201:
-        print(f"✅ Created: {product['title']}")
-    else:
-        print(f"❌ Failed: {product['title']} ({response.status_code})")
-        print(response.text)
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run FULL sync
+        env:
+          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_TOKEN: ${{ secrets.SHOPIFY_TOKEN }}
+          SUPPLIER_API_URL: ${{ secrets.SUPPLIER_API_URL }}
+          SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
+        run: python sync.py
