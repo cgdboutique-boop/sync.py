@@ -49,54 +49,61 @@ for product in products:
     check_response = requests.get(check_url, headers=shopify_headers)
     existing = check_response.json().get("products", [])
 
-    # Map product
-    mapped_product = {
-        "product": {
-            "title": product["title"],
-            "body_html": product["body_html"],
-            "vendor": product["vendor"],
-            "product_type": product.get("product_type", ""),
-            "handle": handle,
-            "tags": product.get("tags", ""),
-            "status": product.get("status", "draft"),
-            "variants": [
-                {
-                    "sku": variant.get("sku", ""),
-                    "price": variant.get("price", "0.00"),
-                    "option1": variant.get("option1", "Default Title"),
-                    "inventory_quantity": variant.get("inventory_quantity", 0)
-                }
-                for variant in product.get("variants", [])
-            ],
-            "images": [
-                {"src": image["src"]}
-                for image in product.get("images", [])
-            ]
-        }
-    }
-
     if existing:
         # Update existing product
         product_id = existing[0]["id"]
+        update_payload = {
+            "product": {
+                "id": product_id,
+                "title": product["title"],
+                "body_html": product["body_html"],
+                "tags": product.get("tags", ""),
+                "status": product.get("status", "draft")
+            }
+        }
         update_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products/{product_id}.json"
-        response = requests.put(update_url, headers=shopify_headers, data=json.dumps(mapped_product))
+        response = requests.put(update_url, headers=shopify_headers, data=json.dumps(update_payload))
         if response.status_code == 200:
             print(f"🔄 Updated: {product['title']}")
             update_count += 1
         else:
             print(f"❌ Failed to update: {product['title']} ({response.status_code})")
-            print(response.text)
+            print(f"Response: {response.text}")
             error_count += 1
     else:
         # Create new product
+        create_payload = {
+            "product": {
+                "title": product["title"],
+                "body_html": product["body_html"],
+                "vendor": product["vendor"],
+                "product_type": product.get("product_type", ""),
+                "handle": handle,
+                "tags": product.get("tags", ""),
+                "status": product.get("status", "draft"),
+                "variants": [
+                    {
+                        "sku": variant.get("sku", ""),
+                        "price": variant.get("price", "0.00"),
+                        "option1": variant.get("option1", "Default Title"),
+                        "inventory_quantity": variant.get("inventory_quantity", 0)
+                    }
+                    for variant in product.get("variants", [])
+                ],
+                "images": [
+                    {"src": image["src"]}
+                    for image in product.get("images", [])
+                ]
+            }
+        }
         create_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
-        response = requests.post(create_url, headers=shopify_headers, data=json.dumps(mapped_product))
+        response = requests.post(create_url, headers=shopify_headers, data=json.dumps(create_payload))
         if response.status_code == 201:
             print(f"✅ Created: {product['title']}")
             success_count += 1
         else:
             print(f"❌ Failed to create: {product['title']} ({response.status_code})")
-            print(response.text)
+            print(f"Response: {response.text}")
             error_count += 1
 
 # Summary
