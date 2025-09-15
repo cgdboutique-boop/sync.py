@@ -1,114 +1,59 @@
 import os
-import requests
 import time
+import requests
 
-# -------------------------------
-# CONFIG (from GitHub secrets)
-# -------------------------------
-SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")
-SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
-SUPPLIER_API_URL = os.environ.get("SUPPLIER_API_URL")
-SUPPLIER_TOKEN = os.environ.get("SUPPLIER_TOKEN")
+# Load your supplier API token (replace with your actual token if not using env vars)
+SUPPLIER_API_URL = os.getenv("SUPPLIER_API_URL", "https://supplier.com/api/products")
+SUPPLIER_TOKEN = os.getenv("SUPPLIER_TOKEN", "YOUR_SUPPLIER_TOKEN_HERE")
 
-if not SHOPIFY_STORE or not SHOPIFY_TOKEN:
-    raise ValueError("SHOPIFY_STORE or SHOPIFY_TOKEN is not set!")
-if not SUPPLIER_API_URL or not SUPPLIER_TOKEN:
-    raise ValueError("SUPPLIER_API_URL or SUPPLIER_TOKEN is not set!")
+# Possible header formats to test
+HEADER_OPTIONS = [
+    lambda token: {"X-Access-Token": token, "Content-Type": "application/json"},
+    lambda token: {"X-API-Key": token, "Content-Type": "application/json"},
+    lambda token: {"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+]
 
-SHOP_URL = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2025-07"
-shopify_headers = {
-    "X-Shopify-Access-Token": SHOPIFY_TOKEN,
-    "Content-Type": "application/json"
-}
-supplier_headers = {
-    "Authorization": f"Bearer {SUPPLIER_TOKEN}",
-    "Content-Type": "application/json"
-}
+def fetch_supplier_products(limit=100, retries=10):
+    """Try all header styles until one works"""
+    url = f"{SUPPLIER_API_URL}?limit={limit}"
+    
+    for build_headers in HEADER_OPTIONS:
+        headers = build_headers(SUPPLIER_TOKEN)
+        print(f"🔍 Trying header style: {list(headers.keys())[0]} ...")
+        
+        backoff = 5
+        for attempt in range(retries):
+            try:
+                resp = requests.get(url, headers=headers, timeout=30)
+                
+                if resp.status_code == 200:
+                    print(f"✅ Success with {list(headers.keys())[0]} header!")
+                    return resp.json()
+                
+                elif resp.status_code == 401:
+                    print(f"❌ 401 Unauthorized (attempt {attempt+1}/{retries}) with {list(headers.keys())[0]}")
+                    time.sleep(backoff)
+                    backoff *= 2
+                else:
+                    print(f"⚠️ Got {resp.status_code}: {resp.text[:200]}")
+                    break  # stop retrying on this header type
 
-# -------------------------------
-# HELPER FUNCTION
-# -------------------------------
-def request_with_retry(method, url, headers=None, json=None, max_retries=10):
-    retry_delay = 5  # start with 5s
-    for attempt in range(max_retries):
-        try:
-            response = requests.request(method, url, headers=headers, json=json)
-            if response.status_code in [401, 429]:
-                wait = int(response.headers.get("Retry-After", retry_delay))
-                print(f"{response.status_code} error. Retrying in {wait}s...")
-                time.sleep(wait)
-                retry_delay *= 2
-                continue
-            response.raise_for_status()
-            return response
-        except requests.exceptions.RequestException as e:
-            print(f"Request error: {e}. Retrying in {retry_delay}s...")
-            time.sleep(retry_delay)
-            retry_delay *= 2
-    print(f"❌ Failed request after {max_retries} attempts: {url}")
+            except Exception as e:
+                print(f"⚠️ Error: {e}")
+                time.sleep(backoff)
+                backoff *= 2
+
+        print(f"❌ Failed with {list(headers.keys())[0]} header, trying next option...\n")
+
+    print("🚨 All header styles failed. Please confirm with supplier which header to use.")
     return None
 
-# -------------------------------
-# FETCH SUPPLIER PRODUCTS
-# -------------------------------
-def fetch_supplier_products(limit=100):
-    url = f"{SUPPLIER_API_URL}?limit={limit}"
-    response = request_with_retry("GET", url, headers=supplier_headers)
-    if response:
-        return response.json().get("products", [])
-    return []
 
-# -------------------------------
-# SYNC PRODUCTS TO SHOPIFY
-# -------------------------------
-def sync_products(limit=100):
-    print(f"=== Starting supplier sync (limit={limit}) ===")
-    supplier_products = fetch_supplier_products(limit=limit)
-    if not supplier_products:
-        print("❌ No products fetched from supplier.")
-        return
-
-    # Fetch existing Shopify products
-    shopify_products = request_with_retry("GET", f"{SHOP_URL}/products.json?limit=250", headers=shopify_headers)
-    if not shopify_products:
-        print("❌ Failed to fetch Shopify products.")
-        return
-    shopify_products_dict = {p['handle']: p for p in shopify_products.json().get("products", [])}
-
-    for sp in supplier_products:
-        handle = sp.get("handle")
-        if not handle:
-            print("⚠️ Skipping product with no handle.")
-            continue
-
-        # Construct Shopify product payload
-        product_data = {
-            "product": {
-                "title": sp.get("title", ""),
-                "body_html": sp.get("body_html", ""),
-                "vendor": sp.get("vendor", ""),
-                "product_type": sp.get("product_type", ""),
-                "tags": sp.get("tags", ""),
-                "handle": handle
-            }
-        }
-
-        if handle in shopify_products_dict:
-            product_id = shopify_products_dict[handle]["id"]
-            r = request_with_retry("PUT", f"{SHOP_URL}/products/{product_id}.json", headers=shopify_headers, json=product_data)
-            if r:
-                print(f"✅ Updated: {handle}")
-        else:
-            r = request_with_retry("POST", f"{SHOP_URL}/products.json", headers=shopify_headers, json=product_data)
-            if r:
-                print(f"✅ Created: {handle}")
-
-        time.sleep(1)  # slow down requests
-
-    print("✅ Supplier sync completed.")
-
-# -------------------------------
-# RUN
-# -------------------------------
 if __name__ == "__main__":
-    sync_products(limit=100)
+    print("=== Starting supplier sync (limit=100) ===")
+    products = fetch_supplier_products(limit=100)
+
+    if products:
+        print(f"Fetched {len(products)} products ✅")
+    else:
+        print("❌ No products fetched from supplier.")
