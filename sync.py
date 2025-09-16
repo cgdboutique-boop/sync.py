@@ -38,7 +38,7 @@ try:
     supplier_data = supplier_response.json()
 except requests.exceptions.JSONDecodeError:
     print("❌ Supplier response is not valid JSON.")
-    print(f"Raw response:\n{supplier_response.text}")
+    print(f"Raw response:\n{supplier_response.text[:500]}")
     exit(1)
 
 products = supplier_data.get("products", [])
@@ -53,8 +53,8 @@ error_count = 0
 # Sync each product
 # -------------------------------
 for product in products:
-    title = product.get("title", "Untitled Product")
     handle = product.get("handle", "").strip()
+    title = product.get("title", "Untitled Product")
     body_html = product.get("body_html", "")
     vendor = product.get("vendor", "Supplier")
     product_type = product.get("product_type", "")
@@ -73,6 +73,14 @@ for product in products:
     if existing:
         # Update product
         product_id = existing[0]["id"]
+
+        # Optional: override inventory and price
+        for v in variants:
+            v["inventory_management"] = "shopify"
+            v["inventory_policy"] = "deny"
+            v["price"] = v.get("price", "0.00")
+            v["inventory_quantity"] = v.get("inventory_quantity", 0)
+
         update_payload = {
             "product": {
                 "id": product_id,
@@ -95,6 +103,12 @@ for product in products:
             error_count += 1
     else:
         # Create new product
+        for v in variants:
+            v["inventory_management"] = "shopify"
+            v["inventory_policy"] = "deny"
+            v["price"] = v.get("price", "0.00")
+            v["inventory_quantity"] = v.get("inventory_quantity", 0)
+
         create_payload = {
             "product": {
                 "title": title,
