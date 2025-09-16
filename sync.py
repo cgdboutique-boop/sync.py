@@ -65,10 +65,20 @@ for v in variants:
     v["price"] = v.get("price", "0.00")
     v["inventory_quantity"] = v.get("inventory_quantity", 0)
     v["option1"] = v.get("option1", "").strip()
+
+    # Strip Shopify-generated fields
+    for key in ["id", "product_id", "inventory_item_id", "admin_graphql_api_id", "created_at", "updated_at"]:
+        v.pop(key, None)
+
     valid_variants.append(v)
     option_values.append(v["option1"])
 
 options = [{"name": "Size", "values": option_values}]
+
+# Clean images
+for img in images:
+    for key in ["id", "product_id", "admin_graphql_api_id", "created_at", "updated_at"]:
+        img.pop(key, None)
 
 # Check if product exists
 check_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?handle={handle}"
