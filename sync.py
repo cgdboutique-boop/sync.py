@@ -32,6 +32,9 @@ products = supplier_data.get("products", [])
 target = [p for p in products if p.get("handle", "").strip() == "2000133"]
 if not target:
     print("❌ Product with handle '2000133' not found.")
+    print("🔍 Available handles:")
+    for p in products:
+        print("-", p.get("handle", "").strip())
     exit(1)
 
 product = target[0]
