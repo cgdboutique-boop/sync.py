@@ -1,117 +1,123 @@
 import os
 import json
 import requests
-import re
 
-# -------------------------------
-# CONFIG FROM ENVIRONMENT
-# -------------------------------
-SHOPIFY_STORE = os.environ["SHOPIFY_STORE"]  # e.g., cgdboutique.myshopify.com
-SHOPIFY_TOKEN = os.environ["SHOPIFY_TOKEN"]
-SUPPLIER_API_URL = os.environ["SUPPLIER_API_URL"]
-SUPPLIER_TOKEN = os.environ["SUPPLIER_TOKEN"]
+# -----------------------------
+# Load secrets from environment
+# -----------------------------
+SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")  # e.g., cgdboutique.myshopify.com
+SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
+SUPPLIER_API_URL = os.environ.get("SUPPLIER_API_URL")
+SUPPLIER_TOKEN = os.environ.get("SUPPLIER_TOKEN")
 
-supplier_headers = {"X-Shopify-Access-Token": SUPPLIER_TOKEN, "Content-Type": "application/json"}
-shopify_headers = {"X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json"}
-
-# -------------------------------
-# HELPER FUNCTION TO CLEAN HTML
-# -------------------------------
-def clean_text(text):
-    if not text:
+# -----------------------------
+# Helper function
+# -----------------------------
+def safe_str(text):
+    """Convert None to empty string and strip"""
+    if text is None:
         return ""
-    # remove specific unwanted HTML tags
-    text = re.sub(r"<\/?p>", "", text)
-    text = re.sub(r"Â", "", text)
-    text = re.sub(r"<\/?span.*?>", "", text)
-    text = re.sub(r'data-mce-fragment="1"', "", text)
-    return text.strip()
+    return str(text).strip()
 
-# -------------------------------
-# FETCH SUPPLIER PRODUCTS
-# -------------------------------
+# -----------------------------
+# Headers
+# -----------------------------
+supplier_headers = {
+    "X-Shopify-Access-Token": SUPPLIER_TOKEN,
+    "Accept": "application/json"
+}
+shopify_headers = {
+    "X-Shopify-Access-Token": SHOPIFY_TOKEN,
+    "Content-Type": "application/json"
+}
+
+# -----------------------------
+# Fetch supplier products
+# -----------------------------
 supplier_response = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
 if supplier_response.status_code != 200:
-    print("❌ Supplier API request failed:", supplier_response.text)
+    print(f"❌ Failed to fetch supplier products: {supplier_response.text}")
     exit(1)
 
-supplier_products = supplier_response.json().get("products", [])
-print(f"ℹ️ Fetched {len(supplier_products)} products from supplier")
+supplier_data = supplier_response.json()
+products = supplier_data.get("products", [])
 
-# -------------------------------
-# SYNC TO SHOPIFY
-# -------------------------------
-for product in supplier_products:
-    variants_payload = []
-    for variant in product.get("variants", []):
-        sku = variant.get("sku", "").strip()
-        if not sku:
-            # fallback: extract SKU from body_html if missing
-            body = product.get("body_html", "")
-            sku_match = re.search(r"#(\d+)", body)
-            sku = sku_match.group(1) if sku_match else None
-        if not sku:
-            continue  # skip variant if no SKU found
+# -----------------------------
+# Sync products
+# -----------------------------
+for product in products:
+    title = safe_str(product.get("title"))
+    body_html = safe_str(product.get("body_html"))
+    vendor = safe_str(product.get("vendor"))
+    product_type = safe_str(product.get("product_type"))
+    tags = safe_str(product.get("tags"))
+    
+    # Use SKU of first variant or generate handle from title
+    variants = product.get("variants", [])
+    if not variants:
+        print(f"⚠️ Product '{title}' has no variants. Skipping.")
+        continue
 
-        variants_payload.append({
-            "option1": variant.get("option1", "").strip() or "Default",
-            "sku": sku,
-            "price": variant.get("price", "0.00"),
-            "inventory_quantity": variant.get("inventory_quantity", 0),
+    first_variant = variants[0]
+    base_sku = safe_str(first_variant.get("sku")).replace("#", "")
+    handle = base_sku if base_sku else title.lower().replace(" ", "-")
+
+    # Clean variants
+    clean_variants = []
+    for v in variants:
+        clean_variants.append({
+            "option1": safe_str(v.get("option1")),
+            "sku": safe_str(v.get("sku")),
+            "price": safe_str(v.get("price")),
+            "inventory_quantity": v.get("inventory_quantity", 0),
             "inventory_management": "shopify",
             "inventory_policy": "deny"
         })
 
-    # Clean product title/body
-    title = clean_text(product.get("title", "No Title"))
-    body_html = clean_text(product.get("body_html", ""))
+    # Clean images
+    images = [{"src": img.get("src")} for img in product.get("images", []) if img.get("src")]
 
     payload = {
         "product": {
             "title": title,
             "body_html": body_html,
-            "vendor": product.get("vendor", "Supplier"),
-            "product_type": product.get("product_type", ""),
-            "tags": product.get("tags", ""),
-            "variants": variants_payload,
-            "images": [{"src": img.get("src")} for img in product.get("images", [])] if product.get("images") else [],
+            "vendor": vendor,
+            "product_type": product_type,
+            "handle": handle,
+            "tags": tags,
+            "variants": clean_variants,
+            "images": images,
             "published": True
         }
     }
 
-    # -------------------------------
-    # CHECK IF PRODUCT EXISTS BY SKU
-    # -------------------------------
-    product_found = None
-    for existing_page in range(1, 5):  # paginate up to 1000 products
-        existing_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?limit=250&page={existing_page}"
-        existing_resp = requests.get(existing_url, headers=shopify_headers)
-        existing_products = existing_resp.json().get("products", [])
-        if not existing_products:
-            break
-        for existing in existing_products:
-            existing_skus = [v.get("sku") for v in existing.get("variants", [])]
-            if any(v.get("sku") in existing_skus for v in variants_payload):
-                product_found = existing
-                break
-        if product_found:
-            break
+    # -----------------------------
+    # Check if product exists
+    # -----------------------------
+    check_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?handle={handle}"
+    check_response = requests.get(check_url, headers=shopify_headers)
+    existing = check_response.json().get("products", [])
 
-    # -------------------------------
-    # CREATE OR UPDATE
-    # -------------------------------
-    if product_found:
-        product_id = product_found["id"]
+    if existing:
+        # Update existing product
+        product_id = existing[0]["id"]
         update_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products/{product_id}.json"
         response = requests.put(update_url, headers=shopify_headers, data=json.dumps(payload))
-        print(f"🔄 Updated product: {title} ({response.status_code})")
+        action = "Updated"
     else:
+        # Create new product
         create_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
         response = requests.post(create_url, headers=shopify_headers, data=json.dumps(payload))
-        print(f"🆕 Created product: {title} ({response.status_code})")
+        action = "Created"
 
-    # log response body for debugging
-    try:
-        print(json.dumps(response.json(), indent=2))
-    except Exception:
-        print("❌ Failed to parse Shopify response:", response.text)
+    # -----------------------------
+    # Log result
+    # -----------------------------
+    if response.status_code in [200, 201]:
+        print(f"✅ {action} product: {title} (handle: {handle})")
+    else:
+        print(f"❌ Failed to {action.lower()} product: {title}")
+        try:
+            print(json.dumps(response.json(), indent=2))
+        except Exception:
+            print(response.text)
