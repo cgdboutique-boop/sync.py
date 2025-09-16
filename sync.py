@@ -39,14 +39,14 @@ if not target:
 
 product = target[0]
 
-# Extract fields
-handle = product.get("handle", "").strip()
+# Use temporary handle for testing
+handle = "1000106-test"
 title = product.get("title", "Untitled Product").replace("#", "").strip()
 body_html = product.get("body_html", "")
 vendor = product.get("vendor", "Supplier")
 product_type = product.get("product_type", "")
 tags = product.get("tags", "")
-status = product.get("status", "draft")
+status = product.get("status", "active")
 variants = product.get("variants", [])
 images = product.get("images", [])
 
@@ -57,7 +57,7 @@ option_values = []
 for v in variants:
     sku = v.get("sku", "").replace("#", "").strip()
     if "(200)" in sku:
-        continue  # Skip rogue variant
+        continue
 
     v["sku"] = sku
     v["inventory_management"] = "shopify"
@@ -66,7 +66,6 @@ for v in variants:
     v["inventory_quantity"] = v.get("inventory_quantity", 0)
     v["option1"] = v.get("option1", "").strip()
 
-    # Strip Shopify-generated fields
     for key in ["id", "product_id", "inventory_item_id", "admin_graphql_api_id", "created_at", "updated_at"]:
         v.pop(key, None)
 
@@ -79,11 +78,6 @@ options = [{"name": "Size", "values": option_values}]
 for img in images:
     for key in ["id", "product_id", "admin_graphql_api_id", "created_at", "updated_at"]:
         img.pop(key, None)
-
-# Check if product exists
-check_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?handle={handle}"
-check_response = requests.get(check_url, headers=shopify_headers)
-existing = check_response.json().get("products", [])
 
 # Build payload
 payload = {
@@ -106,20 +100,15 @@ print("🧾 Payload being sent:")
 print(json.dumps(payload, indent=2))
 
 # Send request
-if existing:
-    product_id = existing[0]["id"]
-    payload["product"]["id"] = product_id
-    update_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products/{product_id}.json"
-    print("🔄 Updating product...")
-    response = requests.put(update_url, headers=shopify_headers, data=json.dumps(payload))
-else:
-    create_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
-    print("🆕 Creating product...")
-    response = requests.post(create_url, headers=shopify_headers, data=json.dumps(payload))
+create_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
+print("🆕 Creating test product...")
+response = requests.post(create_url, headers=shopify_headers, data=json.dumps(payload))
 
 # Handle response
-if response.status_code in [200, 201]:
-    print(f"✅ Success: {title}")
+print("📦 Shopify response:")
+print(response.text)
+
+if response.status_code == 201:
+    print(f"✅ Test product created: {title}")
 else:
-    print(f"❌ Failed to sync: {title} ({response.status_code})")
-    print(f"Response: {response.text}")
+    print(f"❌ Failed to create test product ({response.status_code})")
