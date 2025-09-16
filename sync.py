@@ -22,7 +22,7 @@ SUPPLIER_TOKEN = os.environ["SUPPLIER_TOKEN"]
 # Headers
 # -------------------------------
 supplier_headers = {
-    "Authorization": f"Bearer {SUPPLIER_TOKEN}",
+    "X-Shopify-Access-Token": SUPPLIER_TOKEN,
     "Accept": "application/json"
 }
 shopify_headers = {
@@ -34,15 +34,16 @@ shopify_headers = {
 # Fetch supplier product data
 # -------------------------------
 supplier_response = requests.get(SUPPLIER_API_URL, headers=supplier_headers)
-if supplier_response.status_code != 200:
-    print(f"❌ Failed to fetch supplier data: {supplier_response.status_code}")
-    print(supplier_response.text)
+try:
+    supplier_data = supplier_response.json()
+except requests.exceptions.JSONDecodeError:
+    print("❌ Supplier response is not valid JSON.")
+    print(f"Raw response:\n{supplier_response.text}")
     exit(1)
 
-supplier_data = supplier_response.json()
-items = supplier_data.get("data", {}).get("items", [])
+products = supplier_data.get("products", [])
 if args.limit:
-    items = items[:args.limit]
+    products = products[:args.limit]
 
 success_count = 0
 update_count = 0
@@ -51,71 +52,16 @@ error_count = 0
 # -------------------------------
 # Sync each product
 # -------------------------------
-for item in items:
-    attributes = item.get("attributes", {})
-
-    handle = attributes.get("handle", "").strip()
-    title = attributes.get("title", "Untitled Product")
-    body_html = attributes.get("description", "")
-    vendor = attributes.get("vendor", "Supplier")
-    product_type = attributes.get("product_type", "")
-    tags = attributes.get("tags", "")
-    status = attributes.get("status", "draft")
-
-    # -------------------------------
-    # Build options + variants
-    # -------------------------------
-    option_names = []
-    variants = []
-
-    if "variants" in attributes and isinstance(attributes["variants"], list) and attributes["variants"]:
-        # Collect all option names used
-        for v in attributes["variants"]:
-            if "options" in v:
-                for opt_name in v["options"].keys():
-                    if opt_name not in option_names and len(option_names) < 3:
-                        option_names.append(opt_name)
-
-        # Build variants with option mapping
-        for v in attributes["variants"]:
-            variant = {
-                "sku": v.get("sku", ""),
-                "price": v.get("price", "0.00"),
-                "inventory_quantity": v.get("inventory_quantity", 0),
-                "inventory_management": "shopify",
-                "inventory_policy": "deny"
-            }
-
-            # Map option values (up to 3)
-            if "options" in v:
-                for idx, opt_name in enumerate(option_names, start=1):
-                    variant[f"option{idx}"] = v["options"].get(opt_name, "Default")
-            else:
-                variant["option1"] = "Default Title"
-
-            variants.append(variant)
-    else:
-        # fallback to single-variant model
-        option_names = ["Title"]
-        variants = [{
-            "sku": attributes.get("sku", ""),
-            "price": attributes.get("price", "0.00"),
-            "option1": "Default Title",
-            "inventory_quantity": attributes.get("inventory_quantity", 0),
-            "inventory_management": "shopify",
-            "inventory_policy": "deny"
-        }]
-
-    # Shopify product options structure
-    options = [{"name": name} for name in option_names]
-
-    # -------------------------------
-    # Build images
-    # -------------------------------
-    images = []
-    for img in attributes.get("images", []):
-        if "src" in img:
-            images.append({"src": img["src"]})
+for product in products:
+    title = product.get("title", "Untitled Product")
+    handle = product.get("handle", "").strip()
+    body_html = product.get("body_html", "")
+    vendor = product.get("vendor", "Supplier")
+    product_type = product.get("product_type", "")
+    tags = product.get("tags", "")
+    status = product.get("status", "draft")
+    variants = product.get("variants", [])
+    images = product.get("images", [])
 
     # -------------------------------
     # Check if product exists
@@ -134,7 +80,6 @@ for item in items:
                 "body_html": body_html,
                 "tags": tags,
                 "status": status,
-                "options": options,
                 "variants": variants,
                 "images": images
             }
@@ -159,7 +104,6 @@ for item in items:
                 "handle": handle,
                 "tags": tags,
                 "status": status,
-                "options": options,
                 "variants": variants,
                 "images": images
             }
