@@ -34,9 +34,17 @@ sku_groups = defaultdict(list)
 # Group variants by base SKU
 for product in products:
     for v in product.get("variants", []):
-        sku = v.get("sku", "").replace("#", "").strip()
-        if not sku or "(200)" in sku:
+        if not isinstance(v, dict):
+            continue  # Skip malformed variant
+
+        sku = v.get("sku")
+        if not isinstance(sku, str):
+            continue  # Skip if SKU is missing or not a string
+
+        sku = sku.replace("#", "").strip()
+        if "(200)" in sku or not sku:
             continue
+
         base_sku = sku.split(" ")[0]
         sku_groups[base_sku].append((product, v))
 
@@ -56,6 +64,8 @@ for base_sku, items in sku_groups.items():
 
     # Clean images
     for img in images:
+        if not isinstance(img, dict):
+            continue
         for key in ["id", "product_id", "admin_graphql_api_id", "created_at", "updated_at"]:
             img.pop(key, None)
 
