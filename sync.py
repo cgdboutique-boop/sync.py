@@ -51,14 +51,21 @@ variants = product.get("variants", [])
 images = product.get("images", [])
 
 # Normalize variants and collect option values
+valid_variants = []
 option_values = []
+
 for v in variants:
+    sku = v.get("sku", "").replace("#", "").strip()
+    if "(200)" in sku:
+        continue  # Skip rogue variant
+
+    v["sku"] = sku
     v["inventory_management"] = "shopify"
     v["inventory_policy"] = "deny"
     v["price"] = v.get("price", "0.00")
     v["inventory_quantity"] = v.get("inventory_quantity", 0)
     v["option1"] = v.get("option1", "").strip()
-    v["sku"] = v.get("sku", "").replace("#", "").strip()
+    valid_variants.append(v)
     option_values.append(v["option1"])
 
 options = [{"name": "Size", "values": option_values}]
@@ -68,50 +75,41 @@ check_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?handle={ha
 check_response = requests.get(check_url, headers=shopify_headers)
 existing = check_response.json().get("products", [])
 
-if existing:
-    # Update product
-    product_id = existing[0]["id"]
-    update_payload = {
-        "product": {
-            "id": product_id,
-            "title": title,
-            "body_html": body_html,
-            "tags": tags,
-            "status": status,
-            "options": options,
-            "variants": variants,
-            "images": images
-        }
+# Build payload
+payload = {
+    "product": {
+        "title": title,
+        "body_html": body_html,
+        "vendor": vendor,
+        "product_type": product_type,
+        "handle": handle,
+        "tags": tags,
+        "status": status,
+        "options": options,
+        "variants": valid_variants,
+        "images": images
     }
+}
+
+# Log payload
+print("🧾 Payload being sent:")
+print(json.dumps(payload, indent=2))
+
+# Send request
+if existing:
+    product_id = existing[0]["id"]
+    payload["product"]["id"] = product_id
     update_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products/{product_id}.json"
     print("🔄 Updating product...")
-    response = requests.put(update_url, headers=shopify_headers, data=json.dumps(update_payload))
-    if response.status_code == 200:
-        print(f"✅ Updated: {title}")
-    else:
-        print(f"❌ Failed to update: {title} ({response.status_code})")
-        print(f"Response: {response.text}")
+    response = requests.put(update_url, headers=shopify_headers, data=json.dumps(payload))
 else:
-    # Create product
-    create_payload = {
-        "product": {
-            "title": title,
-            "body_html": body_html,
-            "vendor": vendor,
-            "product_type": product_type,
-            "handle": handle,
-            "tags": tags,
-            "status": status,
-            "options": options,
-            "variants": variants,
-            "images": images
-        }
-    }
     create_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
     print("🆕 Creating product...")
-    response = requests.post(create_url, headers=shopify_headers, data=json.dumps(create_payload))
-    if response.status_code == 201:
-        print(f"✅ Created: {title}")
-    else:
-        print(f"❌ Failed to create: {title} ({response.status_code})")
-        print(f"Response: {response.text}")
+    response = requests.post(create_url, headers=shopify_headers, data=json.dumps(payload))
+
+# Handle response
+if response.status_code in [200, 201]:
+    print(f"✅ Success: {title}")
+else:
+    print(f"❌ Failed to sync: {title} ({response.status_code})")
+    print(f"Response: {response.text}")
