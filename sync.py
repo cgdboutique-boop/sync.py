@@ -63,6 +63,13 @@ for product in products:
     variants = product.get("variants", [])
     images = product.get("images", [])
 
+    # Normalize variants
+    for v in variants:
+        v["inventory_management"] = "shopify"
+        v["inventory_policy"] = "deny"
+        v["price"] = v.get("price", "0.00")
+        v["inventory_quantity"] = v.get("inventory_quantity", 0)
+
     # -------------------------------
     # Check if product exists
     # -------------------------------
@@ -73,14 +80,6 @@ for product in products:
     if existing:
         # Update product
         product_id = existing[0]["id"]
-
-        # Optional: override inventory and price
-        for v in variants:
-            v["inventory_management"] = "shopify"
-            v["inventory_policy"] = "deny"
-            v["price"] = v.get("price", "0.00")
-            v["inventory_quantity"] = v.get("inventory_quantity", 0)
-
         update_payload = {
             "product": {
                 "id": product_id,
@@ -103,12 +102,6 @@ for product in products:
             error_count += 1
     else:
         # Create new product
-        for v in variants:
-            v["inventory_management"] = "shopify"
-            v["inventory_policy"] = "deny"
-            v["price"] = v.get("price", "0.00")
-            v["inventory_quantity"] = v.get("inventory_quantity", 0)
-
         create_payload = {
             "product": {
                 "title": title,
