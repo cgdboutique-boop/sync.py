@@ -27,11 +27,11 @@ except requests.exceptions.JSONDecodeError:
     print(f"Raw response:\n{supplier_response.text[:500]}")
     exit(1)
 
-# Filter for handle "2000133"
+# Filter for handle "1000106"
 products = supplier_data.get("products", [])
-target = [p for p in products if p.get("handle", "").strip() == "2000133"]
+target = [p for p in products if p.get("handle", "").strip() == "1000106"]
 if not target:
-    print("❌ Product with handle '2000133' not found.")
+    print("❌ Product with handle '1000106' not found.")
     print("🔍 Available handles:")
     for p in products:
         print("-", p.get("handle", "").strip())
@@ -115,3 +115,4 @@ else:
     else:
         print(f"❌ Failed to create: {title} ({response.status_code})")
         print(f"Response: {response.text}")
+
