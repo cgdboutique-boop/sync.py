@@ -1,6 +1,7 @@
 import os
 import json
 import requests
+from collections import defaultdict
 
 # Load secrets from environment
 SHOPIFY_STORE = os.environ["SHOPIFY_STORE"]
@@ -27,88 +28,87 @@ except requests.exceptions.JSONDecodeError:
     print(f"Raw response:\n{supplier_response.text[:500]}")
     exit(1)
 
-# Filter for handle "1000106"
 products = supplier_data.get("products", [])
-target = [p for p in products if p.get("handle", "").strip() == "1000106"]
-if not target:
-    print("❌ Product with handle '1000106' not found.")
-    print("🔍 Available handles:")
-    for p in products:
-        print("-", p.get("handle", "").strip())
-    exit(1)
+sku_groups = defaultdict(list)
 
-product = target[0]
+# Group variants by base SKU
+for product in products:
+    for v in product.get("variants", []):
+        sku = v.get("sku", "").replace("#", "").strip()
+        if not sku or "(200)" in sku:
+            continue
+        base_sku = sku.split(" ")[0]
+        sku_groups[base_sku].append((product, v))
 
-# Use temporary handle for testing
-handle = "1000106-test"
-title = product.get("title", "Untitled Product").replace("#", "").strip()
-body_html = product.get("body_html", "")
-vendor = product.get("vendor", "Supplier")
-product_type = product.get("product_type", "")
-tags = product.get("tags", "")
-status = product.get("status", "active")
-variants = product.get("variants", [])
-images = product.get("images", [])
+# Sync each SKU group
+for base_sku, items in sku_groups.items():
+    print(f"\n🔄 Syncing product for base SKU: {base_sku}")
 
-# Normalize variants and collect option values
-valid_variants = []
-option_values = []
+    # Use first product as reference
+    product, _ = items[0]
+    title = product.get("title", "").replace("#", "").strip()
+    body_html = product.get("body_html", "")
+    vendor = product.get("vendor", "Supplier")
+    product_type = product.get("product_type", "")
+    tags = product.get("tags", "")
+    status = product.get("status", "active")
+    images = product.get("images", [])
 
-for v in variants:
-    sku = v.get("sku", "").replace("#", "").strip()
-    if "(200)" in sku:
-        continue
+    # Clean images
+    for img in images:
+        for key in ["id", "product_id", "admin_graphql_api_id", "created_at", "updated_at"]:
+            img.pop(key, None)
 
-    v["sku"] = sku
-    v["inventory_management"] = "shopify"
-    v["inventory_policy"] = "deny"
-    v["price"] = v.get("price", "0.00")
-    v["inventory_quantity"] = v.get("inventory_quantity", 0)
-    v["option1"] = v.get("option1", "").strip()
+    # Build variants
+    valid_variants = []
+    option_values = []
 
-    for key in ["id", "product_id", "inventory_item_id", "admin_graphql_api_id", "created_at", "updated_at"]:
-        v.pop(key, None)
+    for _, v in items:
+        v["sku"] = v.get("sku", "").replace("#", "").strip()
+        v["inventory_management"] = "shopify"
+        v["inventory_policy"] = "deny"
+        v["price"] = v.get("price", "0.00")
+        v["inventory_quantity"] = v.get("inventory_quantity", 0)
+        v["option1"] = v.get("option1", "").strip()
 
-    valid_variants.append(v)
-    option_values.append(v["option1"])
+        for key in ["id", "product_id", "inventory_item_id", "admin_graphql_api_id", "created_at", "updated_at"]:
+            v.pop(key, None)
 
-options = [{"name": "Size", "values": option_values}]
+        valid_variants.append(v)
+        option_values.append(v["option1"])
 
-# Clean images
-for img in images:
-    for key in ["id", "product_id", "admin_graphql_api_id", "created_at", "updated_at"]:
-        img.pop(key, None)
+    options = [{"name": "Size", "values": option_values}]
+    handle = f"sku-{base_sku}"
 
-# Build payload
-payload = {
-    "product": {
-        "title": title,
-        "body_html": body_html,
-        "vendor": vendor,
-        "product_type": product_type,
-        "handle": handle,
-        "tags": tags,
-        "status": status,
-        "options": options,
-        "variants": valid_variants,
-        "images": images
+    # Build payload
+    payload = {
+        "product": {
+            "title": title,
+            "body_html": body_html,
+            "vendor": vendor,
+            "product_type": product_type,
+            "handle": handle,
+            "tags": tags,
+            "status": status,
+            "options": options,
+            "variants": valid_variants,
+            "images": images
+        }
     }
-}
 
-# Log payload
-print("🧾 Payload being sent:")
-print(json.dumps(payload, indent=2))
+    # Log payload
+    print("🧾 Payload being sent:")
+    print(json.dumps(payload, indent=2))
 
-# Send request
-create_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
-print("🆕 Creating test product...")
-response = requests.post(create_url, headers=shopify_headers, data=json.dumps(payload))
+    # Create product
+    create_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
+    response = requests.post(create_url, headers=shopify_headers, data=json.dumps(payload))
 
-# Handle response
-print("📦 Shopify response:")
-print(response.text)
+    # Handle response
+    print("📦 Shopify response:")
+    print(response.text)
 
-if response.status_code == 201:
-    print(f"✅ Test product created: {title}")
-else:
-    print(f"❌ Failed to create test product ({response.status_code})")
+    if response.status_code == 201:
+        print(f"✅ Created: {title}")
+    else:
+        print(f"❌ Failed to create: {title} ({response.status_code})")
