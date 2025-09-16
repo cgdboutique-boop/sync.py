@@ -83,7 +83,7 @@ for base_sku, items in sku_groups.items():
         option_values.append(v["option1"])
 
     options = [{"name": "Size", "values": option_values}]
-    handle = base_sku  # Use actual handle from supplier
+    handle = base_sku  # Use base SKU as handle
 
     # Build payload
     payload = {
@@ -113,14 +113,19 @@ for base_sku, items in sku_groups.items():
         print(f"🔄 Updating existing product: {handle}")
         response = requests.put(update_url, headers=shopify_headers, data=json.dumps(payload))
     else:
-        print(f"❌ Product with handle '{handle}' not found — cannot update.")
-        continue
+        create_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
+        print(f"🆕 Creating new product: {handle}")
+        response = requests.post(create_url, headers=shopify_headers, data=json.dumps(payload))
 
     # Log response
-    print("📦 Shopify response:")
-    print(response.text)
+    try:
+        print("📦 Shopify response:")
+        print(json.dumps(response.json(), indent=2))
+    except Exception:
+        print("❌ Failed to parse Shopify response:")
+        print(response.text)
 
-    if response.status_code == 200:
-        print(f"✅ Updated: {title}")
+    if response.status_code in [200, 201]:
+        print(f"✅ Synced: {title}")
     else:
-        print(f"❌ Failed to update: {title} ({response.status_code})")
+        print(f"❌ Failed to sync: {title} ({response.status_code})")
