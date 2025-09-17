@@ -44,7 +44,7 @@ jobs:
   full-sync:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 180   # 3 hours max
+    timeout-minutes: 360   # 6 hours max
 
     steps:
       - name: Checkout repository
