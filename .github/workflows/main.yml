@@ -3,7 +3,7 @@ name: Sync Products
 on:
   workflow_dispatch:   # Manual trigger
   schedule:
-    - cron: "0 * * * *"   # Every hour on the hour
+    - cron: "0 2 * * *"   # Daily at 2 AM
 
 concurrency:
   group: "sync-products"
@@ -39,12 +39,12 @@ jobs:
         run: python sync.py --limit 100
 
   # -----------------------
-  # FULL sync - hourly
+  # FULL sync - daily
   # -----------------------
   full-sync:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 180   # 3 hours max
 
     steps:
       - name: Checkout repository
