@@ -1,158 +1,92 @@
 import os
-import json
 import requests
+import json
 from collections import defaultdict
 
-# ----------------------------
-# Load secrets from environment
-# ----------------------------
-SHOPIFY_STORE = os.environ["SHOPIFY_STORE"]
-SHOPIFY_TOKEN = os.environ["SHOPIFY_TOKEN"]
-SUPPLIER_API_URL = os.environ["SUPPLIER_API_URL"]
-SUPPLIER_TOKEN = os.environ["SUPPLIER_TOKEN"]
+# -------------------------------
+# CONFIG
+# -------------------------------
+SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")  # e.g., "cgdboutique.myshopify.com"
+SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
 
-# ----------------------------
-# Headers
-# ----------------------------
-supplier_headers = {
-    "X-Shopify-Access-Token": SUPPLIER_TOKEN,
-    "Accept": "application/json"
-}
-shopify_headers = {
+HEADERS = {
     "X-Shopify-Access-Token": SHOPIFY_TOKEN,
     "Content-Type": "application/json"
 }
 
-# ----------------------------
-# Fetch supplier products using since_id pagination
-# ----------------------------
-def fetch_supplier_products(limit=250):
+# -------------------------------
+# Fetch all products
+# -------------------------------
+def fetch_all_products():
     products = []
-    since_id = 0
-
-    while True:
-        params = {"limit": limit, "since_id": since_id}
-        response = requests.get(SUPPLIER_API_URL, headers=supplier_headers, params=params)
-        if response.status_code != 200:
-            print(f"❌ Supplier API error (since_id {since_id}): {response.text}")
-            break
-        data = response.json().get("products", [])
-        if not data:
-            break
-        products.extend(data)
-        print(f"📥 Fetched {len(data)} products from supplier (since_id: {since_id})")
-        since_id = max([p["id"] for p in data])
-        
-    print(f"✅ Total supplier products fetched: {len(products)}")
+    url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?limit=250"
+    while url:
+        response = requests.get(url, headers=HEADERS)
+        data = response.json()
+        products.extend(data.get("products", []))
+        # Pagination
+        link = response.headers.get("Link", "")
+        if 'rel="next"' in link:
+            url = link.split("<")[1].split(">")[0]
+        else:
+            url = None
     return products
 
-# ----------------------------
-# Fetch all supplier products
-# ----------------------------
-products = fetch_supplier_products()
+# -------------------------------
+# Delete a product
+# -------------------------------
+def delete_product(product_id):
+    url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products/{product_id}.json"
+    response = requests.delete(url, headers=HEADERS)
+    return response.status_code in [200, 204]
 
-# ----------------------------
-# Group variants by base SKU
-# ----------------------------
-sku_groups = defaultdict(list)
-for product in products:
-    for v in product.get("variants", []):
-        if not isinstance(v, dict):
-            continue
-        sku = v.get("sku")
-        if not isinstance(sku, str):
-            continue
-        sku = sku.replace("#", "").strip()
-        if "(200)" in sku or not sku:
-            continue
-        base_sku = sku.split(" ")[0]
-        sku_groups[base_sku].append((product, v))
+# -------------------------------
+# Update vendor name
+# -------------------------------
+def update_vendor(product_id, vendor_name):
+    url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products/{product_id}.json"
+    payload = {"product": {"id": product_id, "vendor": vendor_name}}
+    response = requests.put(url, headers=HEADERS, data=json.dumps(payload))
+    return response.status_code in [200, 201]
 
-# ----------------------------
-# Sync each SKU group to Shopify
-# ----------------------------
-for base_sku, items in sku_groups.items():
-    print(f"\n🔄 Syncing product for base SKU: {base_sku}")
+# -------------------------------
+# Main logic
+# -------------------------------
+def main():
+    print("Fetching all products from Shopify...")
+    products = fetch_all_products()
+    print(f"Total products fetched: {len(products)}")
 
-    # Use first product as reference
-    product, _ = items[0]
-    title = product.get("title", "").replace("#", "").strip()
-    body_html = product.get("body_html", "")
-    vendor = product.get("vendor", "Supplier")
-    product_type = product.get("product_type", "")
-    tags = product.get("tags", "")
-    status = product.get("status", "active")
-    images = product.get("images", [])
+    # Group products by SKU
+    sku_to_products = defaultdict(list)
+    for product in products:
+        for variant in product.get("variants", []):
+            sku = variant.get("sku")
+            if sku:
+                sku_to_products[sku].append(product)
 
-    # Clean images
-    for img in images:
-        if not isinstance(img, dict):
-            continue
-        for key in ["id", "product_id", "admin_graphql_api_id", "created_at", "updated_at"]:
-            img.pop(key, None)
+    print("Checking for duplicate SKUs...")
+    duplicates_count = 0
+    for sku, items in sku_to_products.items():
+        if len(items) > 1:
+            duplicates_count += len(items) - 1
+            # Keep first, delete rest
+            for product_to_delete in items[1:]:
+                product_id = product_to_delete["id"]
+                if delete_product(product_id):
+                    print(f"✅ Deleted duplicate product ID {product_id} for SKU {sku}")
+                else:
+                    print(f"❌ Failed to delete product ID {product_id} for SKU {sku}")
 
-    # Build variants
-    valid_variants = []
-    option_values = []
+    print(f"Total duplicates deleted: {duplicates_count}")
 
-    for _, v in items:
-        v["sku"] = v.get("sku", "").replace("#", "").strip()
-        v["inventory_management"] = "shopify"
-        v["inventory_policy"] = "deny"
-        v["price"] = v.get("price", "0.00")
-        v["inventory_quantity"] = v.get("inventory_quantity", 0)
-        v["option1"] = v.get("option1", "").strip()
-        for key in ["id", "product_id", "inventory_item_id", "admin_graphql_api_id", "created_at", "updated_at"]:
-            v.pop(key, None)
-        valid_variants.append(v)
-        option_values.append(v["option1"])
+    # Update vendor for remaining products
+    print("Updating vendor for remaining products...")
+    for product in products:
+        update_vendor(product["id"], "CGD Kids Boutique")
+        print(f"🔄 Updated vendor for product ID {product['id']}")
 
-    options = [{"name": "Size", "values": option_values}]
-    handle = base_sku  # Use base SKU as handle
+    print("✅ Duplicate removal and vendor update complete.")
 
-    # Build payload
-    payload = {
-        "product": {
-            "title": title,
-            "body_html": body_html,
-            "vendor": vendor,
-            "product_type": product_type,
-            "handle": handle,
-            "tags": tags,
-            "status": status,
-            "options": options,
-            "variants": valid_variants,
-            "images": images
-        }
-    }
-
-    # ----------------------------
-    # Check if product exists
-    # ----------------------------
-    check_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?handle={handle}"
-    check_response = requests.get(check_url, headers=shopify_headers)
-    existing = check_response.json().get("products", [])
-
-    if existing:
-        product_id = existing[0]["id"]
-        payload["product"]["id"] = product_id
-        update_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products/{product_id}.json"
-        print(f"🔄 Updating existing product: {handle}")
-        response = requests.put(update_url, headers=shopify_headers, data=json.dumps(payload))
-    else:
-        create_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
-        print(f"🆕 Creating new product: {handle}")
-        response = requests.post(create_url, headers=shopify_headers, data=json.dumps(payload))
-
-    # Log response
-    try:
-        print("📦 Shopify response:")
-        print(json.dumps(response.json(), indent=2))
-    except Exception:
-        print("❌ Failed to parse Shopify response:")
-        print(response.text)
-
-    if response.status_code in [200, 201]:
-        print(f"✅ Synced: {title}")
-    else:
-        print(f"❌ Failed to sync: {title} ({response.status_code})")
+if __name__ == "__main__":
+    main()
