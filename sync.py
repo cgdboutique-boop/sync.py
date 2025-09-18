@@ -1,92 +1,112 @@
 import os
 import requests
-import json
+import argparse
 from collections import defaultdict
 
 # -------------------------------
 # CONFIG
 # -------------------------------
-SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")  # e.g., "cgdboutique.myshopify.com"
+SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")
 SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
 
 HEADERS = {
+    "Content-Type": "application/json",
     "X-Shopify-Access-Token": SHOPIFY_TOKEN,
-    "Content-Type": "application/json"
 }
 
+API_BASE = f"https://{SHOPIFY_STORE}/admin/api/2025-01"
+
+
 # -------------------------------
-# Fetch all products
+# Shopify Helpers
 # -------------------------------
-def fetch_all_products():
+def get_all_products():
+    """Fetch all products from Shopify (REST pagination)."""
     products = []
-    url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?limit=250"
+    url = f"{API_BASE}/products.json?limit=250"
     while url:
-        response = requests.get(url, headers=HEADERS)
-        data = response.json()
-        products.extend(data.get("products", []))
+        resp = requests.get(url, headers=HEADERS)
+        resp.raise_for_status()
+        data = resp.json().get("products", [])
+        products.extend(data)
+
         # Pagination
-        link = response.headers.get("Link", "")
-        if 'rel="next"' in link:
-            url = link.split("<")[1].split(">")[0]
+        link = resp.headers.get("Link")
+        if link and 'rel="next"' in link:
+            url = link.split(";")[0].strip("<> ")
         else:
             url = None
     return products
 
-# -------------------------------
-# Delete a product
-# -------------------------------
+
+def update_vendor(product_id, new_vendor):
+    """Update product vendor."""
+    url = f"{API_BASE}/products/{product_id}.json"
+    payload = {"product": {"id": product_id, "vendor": new_vendor}}
+    resp = requests.put(url, headers=HEADERS, json=payload)
+    if resp.status_code == 200:
+        print(f"✅ Updated vendor for product {product_id} → {new_vendor}")
+        return True
+    else:
+        print(f"❌ Failed to update vendor for product {product_id}: {resp.text}")
+        return False
+
+
 def delete_product(product_id):
-    url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products/{product_id}.json"
-    response = requests.delete(url, headers=HEADERS)
-    return response.status_code in [200, 204]
+    """Delete product by ID."""
+    url = f"{API_BASE}/products/{product_id}.json"
+    resp = requests.delete(url, headers=HEADERS)
+    if resp.status_code == 200:
+        print(f"🗑️ Deleted duplicate product {product_id}")
+        return True
+    else:
+        print(f"❌ Failed to delete product {product_id}: {resp.text}")
+        return False
+
 
 # -------------------------------
-# Update vendor name
+# Main Logic
 # -------------------------------
-def update_vendor(product_id, vendor_name):
-    url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products/{product_id}.json"
-    payload = {"product": {"id": product_id, "vendor": vendor_name}}
-    response = requests.put(url, headers=HEADERS, data=json.dumps(payload))
-    return response.status_code in [200, 201]
+def clean_and_update():
+    products = get_all_products()
+    print(f"📦 Total products fetched: {len(products)}")
+
+    updated_count = 0
+    deleted_count = 0
+
+    # --- Step 1: Update vendor for all products
+    for p in products:
+        if p.get("vendor") != "CGD Kids Boutique":
+            if update_vendor(p["id"], "CGD Kids Boutique"):
+                updated_count += 1
+
+    # --- Step 2: Remove duplicates by handle
+    grouped = defaultdict(list)
+    for p in products:
+        grouped[p["handle"]].append(p)
+
+    for handle, group in grouped.items():
+        if len(group) > 1:
+            # Sort by created_at → keep oldest
+            group.sort(key=lambda x: x["created_at"])
+            to_keep = group[0]
+            to_delete = group[1:]
+            for d in to_delete:
+                if delete_product(d["id"]):
+                    deleted_count += 1
+            print(f"🔄 Handle '{handle}': kept {to_keep['id']}, deleted {len(to_delete)} duplicates")
+
+    # --- Report
+    print("\n📊 SUMMARY")
+    print(f"   ✅ Vendor updates: {updated_count}")
+    print(f"   🗑️ Duplicates removed: {deleted_count}")
+    print(f"   📦 Final total products (approx): {len(products) - deleted_count}")
+
 
 # -------------------------------
-# Main logic
+# CLI
 # -------------------------------
-def main():
-    print("Fetching all products from Shopify...")
-    products = fetch_all_products()
-    print(f"Total products fetched: {len(products)}")
-
-    # Group products by SKU
-    sku_to_products = defaultdict(list)
-    for product in products:
-        for variant in product.get("variants", []):
-            sku = variant.get("sku")
-            if sku:
-                sku_to_products[sku].append(product)
-
-    print("Checking for duplicate SKUs...")
-    duplicates_count = 0
-    for sku, items in sku_to_products.items():
-        if len(items) > 1:
-            duplicates_count += len(items) - 1
-            # Keep first, delete rest
-            for product_to_delete in items[1:]:
-                product_id = product_to_delete["id"]
-                if delete_product(product_id):
-                    print(f"✅ Deleted duplicate product ID {product_id} for SKU {sku}")
-                else:
-                    print(f"❌ Failed to delete product ID {product_id} for SKU {sku}")
-
-    print(f"Total duplicates deleted: {duplicates_count}")
-
-    # Update vendor for remaining products
-    print("Updating vendor for remaining products...")
-    for product in products:
-        update_vendor(product["id"], "CGD Kids Boutique")
-        print(f"🔄 Updated vendor for product ID {product['id']}")
-
-    print("✅ Duplicate removal and vendor update complete.")
-
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    args = parser.parse_args()
+    clean_and_update()
