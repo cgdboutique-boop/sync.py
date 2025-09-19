@@ -1,87 +1,76 @@
 import os
-import json
 import requests
-import argparse
-from time import sleep
 
 # -------------------------------
-# CONFIG / ENV VARIABLES
+# Environment variables
 # -------------------------------
 SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")
 SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
 SUPPLIER_API_URL = os.environ.get("SUPPLIER_API_URL")
 SUPPLIER_TOKEN = os.environ.get("SUPPLIER_TOKEN")
-
-VENDOR_NAME = "CGD Kids Boutique"  # Vendor name to add to products
-ENABLE_DELETE_DUPLICATES = True     # Set False to skip duplicates deletion
-
-HEADERS_SHOPIFY = {
-    "Content-Type": "application/json",
-    "X-Shopify-Access-Token": SHOPIFY_TOKEN
-}
-
-HEADERS_SUPPLIER = {
-    "Authorization": f"Bearer {SUPPLIER_TOKEN}",
-    "Content-Type": "application/json"
-}
+VENDOR_NAME = "CGD Kids Boutique"  # Your vendor name
 
 # -------------------------------
-# FETCH SUPPLIER PRODUCTS
+# Helper functions
 # -------------------------------
-def fetch_supplier_products(limit=None):
-    print("Fetching products from supplier...")
-    r = requests.get(SUPPLIER_API_URL, headers=HEADERS_SUPPLIER)
+def fetch_supplier_products():
+    headers = {
+        "Authorization": f"Bearer {SUPPLIER_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    try:
+        response = requests.get(SUPPLIER_API_URL, headers=headers, timeout=30)
+        response.raise_for_status()
+        products = response.json()
+        print(f"Fetched {len(products)} supplier products")
+        return products
+    except requests.exceptions.HTTPError as e:
+        print(f"Warning: Could not fetch supplier products ({e})")
+        return []
+    except Exception as e:
+        print(f"Error fetching supplier products: {e}")
+        return []
+
+def get_shopify_products():
+    url = f"https://{SHOPIFY_STORE}/admin/api/2025-01/products.json?limit=250"
+    headers = {"X-Shopify-Access-Token": SHOPIFY_TOKEN}
+    r = requests.get(url, headers=headers)
     r.raise_for_status()
-    products = r.json().get("products", [])
-    if limit:
-        products = products[:limit]
-    print(f"Fetched {len(products)} products.")
-    return products
+    return r.json().get("products", [])
 
-# -------------------------------
-# DELETE DUPLICATES
-# -------------------------------
-def delete_duplicates():
-    print("Checking for duplicate products in Shopify...")
-    url = f"https://{SHOPIFY_STORE}/admin/api/2025-04/products.json?limit=250"
-    r = requests.get(url, headers=HEADERS_SHOPIFY)
-    r.raise_for_status()
-    products = r.json().get("products", [])
-
+def delete_duplicates(products):
     seen_titles = {}
     duplicates = []
+    headers = {"X-Shopify-Access-Token": SHOPIFY_TOKEN}
 
-    for prod in products:
-        title = prod["title"]
-        if title in seen_titles:
-            duplicates.append(prod)
+    for p in products:
+        key = p['title'].lower()
+        if key in seen_titles:
+            duplicates.append(p)
         else:
-            seen_titles[title] = prod
+            seen_titles[key] = p
 
-    if not duplicates:
+    if duplicates:
+        print(f"Found {len(duplicates)} duplicates. Deleting now...")
+        for p in duplicates:
+            del_url = f"https://{SHOPIFY_STORE}/admin/api/2025-01/products/{p['id']}.json"
+            requests.delete(del_url, headers=headers)
+            print(f"Deleted duplicate: {p['title']} (ID: {p['id']})")
+    else:
         print("No duplicates found.")
-        return
 
-    print(f"Found {len(duplicates)} duplicates. Deleting now...")
-    for dup in duplicates:
-        delete_url = f"https://{SHOPIFY_STORE}/admin/api/2025-04/products/{dup['id']}.json"
-        r = requests.delete(delete_url, headers=HEADERS_SHOPIFY)
-        if r.status_code == 200:
-            print(f"Deleted duplicate: {dup['title']} (ID: {dup['id']})")
-        else:
-            print(f"Failed to delete {dup['title']}: {r.text}")
+def product_exists(shopify_products, title):
+    title_lower = title.lower()
+    return any(p['title'].lower() == title_lower for p in shopify_products)
 
-# -------------------------------
-# CREATE / UPDATE SHOPIFY PRODUCT
-# -------------------------------
-def create_or_update_shopify_product(product):
-    # Check if product already exists
-    search_url = f"https://{SHOPIFY_STORE}/admin/api/2025-04/products.json?title={product['title']}"
-    r = requests.get(search_url, headers=HEADERS_SHOPIFY)
-    r.raise_for_status()
-    existing_products = r.json().get("products", [])
+def add_product_to_shopify(product):
+    url = f"https://{SHOPIFY_STORE}/admin/api/2025-01/products.json"
+    headers = {
+        "X-Shopify-Access-Token": SHOPIFY_TOKEN,
+        "Content-Type": "application/json"
+    }
 
-    data = {
+    payload = {
         "product": {
             "title": product["title"],
             "body_html": product.get("description", ""),
@@ -96,47 +85,38 @@ def create_or_update_shopify_product(product):
         }
     }
 
-    if existing_products:
-        # Update first existing product
-        prod_id = existing_products[0]["id"]
-        url = f"https://{SHOPIFY_STORE}/admin/api/2025-04/products/{prod_id}.json"
-        r = requests.put(url, headers=HEADERS_SHOPIFY, json=data)
-        if r.status_code == 200:
-            print(f"Updated product: {product['title']}")
-        else:
-            print(f"Failed to update {product['title']}: {r.text}")
+    r = requests.post(url, json=payload, headers=headers)
+    if r.status_code == 201:
+        print(f"Added product: {product['title']}")
     else:
-        # Create new product
-        url = f"https://{SHOPIFY_STORE}/admin/api/2025-04/products.json"
-        r = requests.post(url, headers=HEADERS_SHOPIFY, json=data)
-        if r.status_code == 201:
-            print(f"Created product: {product['title']}")
-        else:
-            print(f"Failed to create {product['title']}: {r.text}")
+        print(f"Failed to add product: {product['title']} ({r.status_code})")
 
 # -------------------------------
-# MAIN FUNCTION
+# Main workflow
 # -------------------------------
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--limit", type=int, help="Limit number of products (for testing)")
-    args = parser.parse_args()
-
     try:
-        if ENABLE_DELETE_DUPLICATES:
-            delete_duplicates()
-
-        products = fetch_supplier_products(limit=args.limit)
-        for product in products:
-            create_or_update_shopify_product(product)
-            sleep(0.5)  # avoid API throttling
-
-        print("Sync completed successfully.")
+        print("Fetching Shopify products...")
+        shopify_products = get_shopify_products()
     except Exception as e:
-        print(f"Error during sync: {e}")
+        print(f"Error fetching Shopify products: {e}")
+        return
 
-# -------------------------------
-# ENTRY POINT
-# -------------------------------
+    delete_duplicates(shopify_products)
+
+    supplier_products = fetch_supplier_products()
+    if not supplier_products:
+        print("Skipping product creation due to fetch error.")
+        return
+
+    print("Syncing supplier products to Shopify...")
+    for sp in supplier_products:
+        if not product_exists(shopify_products, sp["title"]):
+            add_product_to_shopify(sp)
+        else:
+            print(f"Skipping duplicate product: {sp['title']}")
+
+    print("Sync completed.")
+
 if __name__ == "__main__":
     main()
