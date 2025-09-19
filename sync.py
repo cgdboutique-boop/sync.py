@@ -78,7 +78,10 @@ for base_sku, items in sku_groups.items():
     product, _ = items[0]
     title = product.get("title", "").replace("#", "").strip()
     body_html = product.get("body_html", "")
-    vendor = product.get("vendor", "Supplier")
+    
+    # --- Custom vendor name ---
+    vendor = "CGD Kids Boutique"
+    
     product_type = product.get("product_type", "")
     tags = product.get("tags", "")
     status = product.get("status", "active")
