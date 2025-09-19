@@ -1,170 +1,62 @@
 import os
 import json
 import requests
-from collections import defaultdict
-import argparse
+import time
 
-# ----------------------------
-# CLI arguments
-# ----------------------------
-parser = argparse.ArgumentParser()
-parser.add_argument("--limit", type=int, help="Limit number of supplier products to sync")
-args = parser.parse_args()
+# -------------------------------
+# CONFIG (from environment variables / GitHub secrets)
+# -------------------------------
+SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")  # e.g., "yourstore.myshopify.com"
+SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
 
-# ----------------------------
-# Load secrets from environment
-# ----------------------------
-SHOPIFY_STORE = os.environ["SHOPIFY_STORE"]
-SHOPIFY_TOKEN = os.environ["SHOPIFY_TOKEN"]
-SUPPLIER_API_URL = os.environ["SUPPLIER_API_URL"]
-SUPPLIER_TOKEN = os.environ["SUPPLIER_TOKEN"]
-
-# ----------------------------
-# Headers
-# ----------------------------
-supplier_headers = {
-    "X-Shopify-Access-Token": SUPPLIER_TOKEN,
-    "Accept": "application/json"
-}
-shopify_headers = {
-    "X-Shopify-Access-Token": SHOPIFY_TOKEN,
-    "Content-Type": "application/json"
+HEADERS = {
+    "Content-Type": "application/json",
+    "X-Shopify-Access-Token": SHOPIFY_TOKEN
 }
 
-# ----------------------------
-# Fetch supplier products using since_id pagination
-# ----------------------------
-def fetch_supplier_products(limit=250, max_products=None):
-    products = []
-    since_id = 0
-
-    while True:
-        params = {"limit": limit, "since_id": since_id}
-        response = requests.get(SUPPLIER_API_URL, headers=supplier_headers, params=params)
-        if response.status_code != 200:
-            print(f"❌ Supplier API error (since_id {since_id}): {response.text}")
-            break
-        data = response.json().get("products", [])
-        if not data:
-            break
-        products.extend(data)
-        print(f"📥 Fetched {len(data)} products from supplier (since_id: {since_id})")
-        since_id = max([p["id"] for p in data])
-
-        if max_products and len(products) >= max_products:
-            products = products[:max_products]
-            break
-
-    print(f"✅ Total supplier products fetched: {len(products)}")
-    return products
-
-# ----------------------------
-# Fetch all supplier products
-# ----------------------------
-products = fetch_supplier_products(max_products=args.limit)
-
-# ----------------------------
-# Group variants by base SKU
-# ----------------------------
-sku_groups = defaultdict(list)
-for product in products:
-    for v in product.get("variants", []):
-        if not isinstance(v, dict):
-            continue
-        sku = v.get("sku")
-        if not isinstance(sku, str):
-            continue
-        sku = sku.replace("#", "").strip()
-        if "(200)" in sku or not sku:
-            continue
-        base_sku = sku.split(" ")[0]
-        sku_groups[base_sku].append((product, v))
-
-# ----------------------------
-# Sync each SKU group to Shopify
-# ----------------------------
-for base_sku, items in sku_groups.items():
-    print(f"\n🔄 Syncing product for base SKU: {base_sku}")
-
-    # Use first product as reference
-    product, _ = items[0]
-    title = product.get("title", "").replace("#", "").strip()
-    body_html = product.get("body_html", "")
-    vendor = product.get("vendor", "Supplier")
-    product_type = product.get("product_type", "")
-    tags = product.get("tags", "")
-    status = product.get("status", "active")
-    images = product.get("images", [])
-
-    # Clean images
-    for img in images:
-        if not isinstance(img, dict):
-            continue
-        for key in ["id", "product_id", "admin_graphql_api_id", "created_at", "updated_at"]:
-            img.pop(key, None)
-
-    # Build variants
-    valid_variants = []
-    option_values = []
-
-    for _, v in items:
-        v["sku"] = v.get("sku", "").replace("#", "").strip()
-        v["inventory_management"] = "shopify"
-        v["inventory_policy"] = "deny"
-        v["price"] = v.get("price", "0.00")
-        v["inventory_quantity"] = v.get("inventory_quantity", 0)
-        v["option1"] = v.get("option1", "").strip()
-        for key in ["id", "product_id", "inventory_item_id", "admin_graphql_api_id", "created_at", "updated_at"]:
-            v.pop(key, None)
-        valid_variants.append(v)
-        option_values.append(v["option1"])
-
-    options = [{"name": "Size", "values": option_values}]
-    handle = base_sku  # Use base SKU as handle
-
-    # Build payload
-    payload = {
-        "product": {
-            "title": title,
-            "body_html": body_html,
-            "vendor": vendor,
-            "product_type": product_type,
-            "handle": handle,
-            "tags": tags,
-            "status": status,
-            "options": options,
-            "variants": valid_variants,
-            "images": images
-        }
+# -------------------------------
+# SAMPLE PRODUCT DATA
+# -------------------------------
+# You can loop through multiple products here if needed
+product_title = "Sample Product"
+product_description = "<strong>Awesome product description</strong>"
+product_type = "Toys"
+variants_list = [
+    {
+        "option1": "Default Title",
+        "price": "99.99",
+        "sku": "SKU001",
+        "inventory_management": "shopify",
+        "inventory_quantity": 10
     }
+]
+images_list = [
+    {"src": "https://example.com/image1.jpg"}
+]
 
-    # ----------------------------
-    # Check if product exists
-    # ----------------------------
-    check_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?handle={handle}"
-    check_response = requests.get(check_url, headers=shopify_headers)
-    existing = check_response.json().get("products", [])
+# -------------------------------
+# CREATE/UPDATE PRODUCT PAYLOAD
+# -------------------------------
+product_data = {
+    "title": product_title,
+    "body_html": product_description,
+    "vendor": "CGD Kids Boutique",  # <-- vendor added
+    "product_type": product_type,
+    "variants": variants_list,
+    "images": images_list
+}
 
-    if existing:
-        product_id = existing[0]["id"]
-        payload["product"]["id"] = product_id
-        update_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products/{product_id}.json"
-        print(f"🔄 Updating existing product: {handle}")
-        response = requests.put(update_url, headers=shopify_headers, data=json.dumps(payload))
-    else:
-        create_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
-        print(f"🆕 Creating new product: {handle}")
-        response = requests.post(create_url, headers=shopify_headers, data=json.dumps(payload))
+shopify_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
 
-    # Log response
-    try:
-        print("📦 Shopify response:")
-        print(json.dumps(response.json(), indent=2))
-    except Exception:
-        print("❌ Failed to parse Shopify response:")
-        print(response.text)
+# -------------------------------
+# MAKE THE REQUEST
+# -------------------------------
+response = requests.post(shopify_url, headers=HEADERS, json={"product": product_data})
 
-    if response.status_code in [200, 201]:
-        print(f"✅ Synced: {title}")
-    else:
-        print(f"❌ Failed to sync: {title} ({response.status_code})")
+if response.status_code == 201:
+    print("✅ Product created successfully!")
+    product_response = response.json()
+    print(json.dumps(product_response, indent=2))
+else:
+    print(f"❌ Failed to create product. Status Code: {response.status_code}")
+    print(response.text)
