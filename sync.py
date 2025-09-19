@@ -2,6 +2,14 @@ import os
 import json
 import requests
 from collections import defaultdict
+import argparse
+
+# ----------------------------
+# CLI arguments
+# ----------------------------
+parser = argparse.ArgumentParser()
+parser.add_argument("--limit", type=int, help="Limit number of supplier products to sync")
+args = parser.parse_args()
 
 # ----------------------------
 # Load secrets from environment
@@ -26,7 +34,7 @@ shopify_headers = {
 # ----------------------------
 # Fetch supplier products using since_id pagination
 # ----------------------------
-def fetch_supplier_products(limit=250):
+def fetch_supplier_products(limit=250, max_products=None):
     products = []
     since_id = 0
 
@@ -43,13 +51,17 @@ def fetch_supplier_products(limit=250):
         print(f"📥 Fetched {len(data)} products from supplier (since_id: {since_id})")
         since_id = max([p["id"] for p in data])
 
+        if max_products and len(products) >= max_products:
+            products = products[:max_products]
+            break
+
     print(f"✅ Total supplier products fetched: {len(products)}")
     return products
 
 # ----------------------------
 # Fetch all supplier products
 # ----------------------------
-products = fetch_supplier_products()
+products = fetch_supplier_products(max_products=args.limit)
 
 # ----------------------------
 # Group variants by base SKU
@@ -78,7 +90,7 @@ for base_sku, items in sku_groups.items():
     product, _ = items[0]
     title = product.get("title", "").replace("#", "").strip()
     body_html = product.get("body_html", "")
-    vendor = "CGD Kids Boutique"   # ✅ Force vendor override
+    vendor = product.get("vendor", "Supplier")
     product_type = product.get("product_type", "")
     tags = product.get("tags", "")
     status = product.get("status", "active")
@@ -115,7 +127,7 @@ for base_sku, items in sku_groups.items():
         "product": {
             "title": title,
             "body_html": body_html,
-            "vendor": vendor,  # ✅ forced vendor
+            "vendor": vendor,
             "product_type": product_type,
             "handle": handle,
             "tags": tags,
@@ -132,17 +144,6 @@ for base_sku, items in sku_groups.items():
     check_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?handle={handle}"
     check_response = requests.get(check_url, headers=shopify_headers)
     existing = check_response.json().get("products", [])
-
-    # ✅ Remove duplicates
-    if len(existing) > 1:
-        print(f"⚠️ Found {len(existing)} duplicates for handle {handle}. Deleting extras...")
-        for dup in existing[1:]:
-            delete_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products/{dup['id']}.json"
-            del_resp = requests.delete(delete_url, headers=shopify_headers)
-            if del_resp.status_code == 200:
-                print(f"🗑️ Deleted duplicate product ID {dup['id']}")
-            else:
-                print(f"❌ Failed to delete duplicate {dup['id']}: {del_resp.text}")
 
     if existing:
         product_id = existing[0]["id"]
