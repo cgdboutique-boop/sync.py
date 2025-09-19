@@ -1,165 +1,142 @@
 import os
 import json
 import requests
+import argparse
+from time import sleep
 
 # -------------------------------
-# CONFIG (from environment variables / GitHub secrets)
+# CONFIG / ENV VARIABLES
 # -------------------------------
 SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")
 SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
+SUPPLIER_API_URL = os.environ.get("SUPPLIER_API_URL")
+SUPPLIER_TOKEN = os.environ.get("SUPPLIER_TOKEN")
 
-HEADERS = {
+VENDOR_NAME = "CGD Kids Boutique"  # Vendor name to add to products
+ENABLE_DELETE_DUPLICATES = True     # Set False to skip duplicates deletion
+
+HEADERS_SHOPIFY = {
     "Content-Type": "application/json",
     "X-Shopify-Access-Token": SHOPIFY_TOKEN
 }
 
-# -------------------------------
-# SAMPLE PRODUCT DATA
-# -------------------------------
-product_title = "Sample Product"
-product_description = "<strong>Awesome product description</strong>"
-product_type = "Toys"
-vendor_name = "CGD Kids Boutique"
-
-variants_list = [
-    {
-        "option1": "Red",
-        "price": "99.99",
-        "sku": "SKU_RED",
-        "inventory_management": "shopify",
-        "inventory_quantity": 10
-    },
-    {
-        "option1": "Blue",
-        "price": "109.99",
-        "sku": "SKU_BLUE",
-        "inventory_management": "shopify",
-        "inventory_quantity": 5
-    }
-]
-
-images_list = [
-    {"src": "https://example.com/image1.jpg"},
-    {"src": "https://example.com/image2.jpg"}
-]
+HEADERS_SUPPLIER = {
+    "Authorization": f"Bearer {SUPPLIER_TOKEN}",
+    "Content-Type": "application/json"
+}
 
 # -------------------------------
-# STEP 1: CHECK IF PRODUCT EXISTS
+# FETCH SUPPLIER PRODUCTS
 # -------------------------------
-search_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?title={product_title}"
-search_response = requests.get(search_url, headers=HEADERS)
+def fetch_supplier_products(limit=None):
+    print("Fetching products from supplier...")
+    r = requests.get(SUPPLIER_API_URL, headers=HEADERS_SUPPLIER)
+    r.raise_for_status()
+    products = r.json().get("products", [])
+    if limit:
+        products = products[:limit]
+    print(f"Fetched {len(products)} products.")
+    return products
 
-if search_response.status_code != 200:
-    print(f"❌ Failed to search product. Status: {search_response.status_code}")
-    print(search_response.text)
-    exit()
+# -------------------------------
+# DELETE DUPLICATES
+# -------------------------------
+def delete_duplicates():
+    print("Checking for duplicate products in Shopify...")
+    url = f"https://{SHOPIFY_STORE}/admin/api/2025-04/products.json?limit=250"
+    r = requests.get(url, headers=HEADERS_SHOPIFY)
+    r.raise_for_status()
+    products = r.json().get("products", [])
 
-existing_products = search_response.json().get("products", [])
+    seen_titles = {}
+    duplicates = []
 
-if existing_products:
-    product = existing_products[0]
-    product_id = product["id"]
-    print(f"🔄 Product exists. Updating Product ID: {product_id}")
+    for prod in products:
+        title = prod["title"]
+        if title in seen_titles:
+            duplicates.append(prod)
+        else:
+            seen_titles[title] = prod
 
-    # -------------------------------
-    # STEP 2: UPDATE PRODUCT INFO (TITLE, DESCRIPTION, VENDOR)
-    # -------------------------------
-    product_data = {
+    if not duplicates:
+        print("No duplicates found.")
+        return
+
+    print(f"Found {len(duplicates)} duplicates. Deleting now...")
+    for dup in duplicates:
+        delete_url = f"https://{SHOPIFY_STORE}/admin/api/2025-04/products/{dup['id']}.json"
+        r = requests.delete(delete_url, headers=HEADERS_SHOPIFY)
+        if r.status_code == 200:
+            print(f"Deleted duplicate: {dup['title']} (ID: {dup['id']})")
+        else:
+            print(f"Failed to delete {dup['title']}: {r.text}")
+
+# -------------------------------
+# CREATE / UPDATE SHOPIFY PRODUCT
+# -------------------------------
+def create_or_update_shopify_product(product):
+    # Check if product already exists
+    search_url = f"https://{SHOPIFY_STORE}/admin/api/2025-04/products.json?title={product['title']}"
+    r = requests.get(search_url, headers=HEADERS_SHOPIFY)
+    r.raise_for_status()
+    existing_products = r.json().get("products", [])
+
+    data = {
         "product": {
-            "id": product_id,
-            "title": product_title,
-            "body_html": product_description,
-            "vendor": vendor_name,
-            "product_type": product_type
+            "title": product["title"],
+            "body_html": product.get("description", ""),
+            "vendor": VENDOR_NAME,
+            "variants": [
+                {
+                    "price": product.get("price", "0.00"),
+                    "sku": product.get("sku", "")
+                }
+            ],
+            "images": [{"src": img} for img in product.get("images", [])]
         }
     }
-    update_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products/{product_id}.json"
-    update_response = requests.put(update_url, headers=HEADERS, json=product_data)
-    if update_response.status_code == 200:
-        print("✅ Product info updated")
-    else:
-        print(f"❌ Failed to update product info. Status: {update_response.status_code}")
-        print(update_response.text)
 
-    # -------------------------------
-    # STEP 3: UPDATE OR ADD VARIANTS
-    # -------------------------------
-    existing_variants = {v["option1"]: v for v in product.get("variants", [])}
-
-    for variant in variants_list:
-        if variant["option1"] in existing_variants:
-            # Update existing variant
-            variant_id = existing_variants[variant["option1"]]["id"]
-            variant_update_data = {
-                "variant": {
-                    "id": variant_id,
-                    "price": variant["price"],
-                    "sku": variant["sku"],
-                    "inventory_quantity": variant["inventory_quantity"],
-                    "inventory_management": "shopify"
-                }
-            }
-            variant_update_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/variants/{variant_id}.json"
-            v_response = requests.put(variant_update_url, headers=HEADERS, json=variant_update_data)
-            if v_response.status_code == 200:
-                print(f"✅ Updated variant: {variant['option1']}")
-            else:
-                print(f"❌ Failed to update variant: {variant['option1']}")
-                print(v_response.text)
+    if existing_products:
+        # Update first existing product
+        prod_id = existing_products[0]["id"]
+        url = f"https://{SHOPIFY_STORE}/admin/api/2025-04/products/{prod_id}.json"
+        r = requests.put(url, headers=HEADERS_SHOPIFY, json=data)
+        if r.status_code == 200:
+            print(f"Updated product: {product['title']}")
         else:
-            # Add new variant
-            new_variant_data = {
-                "variant": {
-                    "option1": variant["option1"],
-                    "price": variant["price"],
-                    "sku": variant["sku"],
-                    "inventory_quantity": variant["inventory_quantity"],
-                    "inventory_management": "shopify"
-                }
-            }
-            create_variant_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products/{product_id}/variants.json"
-            create_response = requests.post(create_variant_url, headers=HEADERS, json=new_variant_data)
-            if create_response.status_code == 201:
-                print(f"➕ Added new variant: {variant['option1']}")
-            else:
-                print(f"❌ Failed to add variant: {variant['option1']}")
-                print(create_response.text)
-
-    # -------------------------------
-    # STEP 4: ADD IMAGES IF NOT ALREADY PRESENT
-    # -------------------------------
-    existing_images = [img["src"] for img in product.get("images", [])]
-    new_images = [img for img in images_list if img["src"] not in existing_images]
-
-    for img in new_images:
-        image_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products/{product_id}/images.json"
-        img_data = {"image": {"src": img["src"]}}
-        img_response = requests.post(image_url, headers=HEADERS, json=img_data)
-        if img_response.status_code == 201:
-            print(f"🖼 Added new image: {img['src']}")
-        else:
-            print(f"❌ Failed to add image: {img['src']}")
-            print(img_response.text)
-
-else:
-    # -------------------------------
-    # PRODUCT DOES NOT EXIST → CREATE NEW PRODUCT
-    # -------------------------------
-    print("➕ Product not found. Creating new product...")
-    product_data = {
-        "product": {
-            "title": product_title,
-            "body_html": product_description,
-            "vendor": vendor_name,
-            "product_type": product_type,
-            "variants": variants_list,
-            "images": images_list
-        }
-    }
-    create_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
-    create_response = requests.post(create_url, headers=HEADERS, json=product_data)
-    if create_response.status_code == 201:
-        print("✅ Product created successfully!")
+            print(f"Failed to update {product['title']}: {r.text}")
     else:
-        print(f"❌ Failed to create product. Status: {create_response.status_code}")
-        print(create_response.text)
+        # Create new product
+        url = f"https://{SHOPIFY_STORE}/admin/api/2025-04/products.json"
+        r = requests.post(url, headers=HEADERS_SHOPIFY, json=data)
+        if r.status_code == 201:
+            print(f"Created product: {product['title']}")
+        else:
+            print(f"Failed to create {product['title']}: {r.text}")
+
+# -------------------------------
+# MAIN FUNCTION
+# -------------------------------
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--limit", type=int, help="Limit number of products (for testing)")
+    args = parser.parse_args()
+
+    try:
+        if ENABLE_DELETE_DUPLICATES:
+            delete_duplicates()
+
+        products = fetch_supplier_products(limit=args.limit)
+        for product in products:
+            create_or_update_shopify_product(product)
+            sleep(0.5)  # avoid API throttling
+
+        print("Sync completed successfully.")
+    except Exception as e:
+        print(f"Error during sync: {e}")
+
+# -------------------------------
+# ENTRY POINT
+# -------------------------------
+if __name__ == "__main__":
+    main()
