@@ -18,6 +18,7 @@ supplier_headers = {
     "X-Shopify-Access-Token": SUPPLIER_TOKEN,
     "Accept": "application/json"
 }
+
 shopify_headers = {
     "X-Shopify-Access-Token": SHOPIFY_TOKEN,
     "Content-Type": "application/json"
@@ -35,14 +36,28 @@ def fetch_supplier_products(limit=250):
         if response.status_code != 200:
             print(f"❌ Supplier API error (since_id {since_id}): {response.text}")
             break
+
         data = response.json().get("products", [])
         if not data:
             break
+
         products.extend(data)
         print(f"📥 Fetched {len(data)} products from supplier (since_id: {since_id})")
         since_id = max([p["id"] for p in data])
+
     print(f"✅ Total supplier products fetched: {len(products)}")
     return products
+
+# ----------------------------
+# Check if SKU already exists on Shopify
+# ----------------------------
+def shopify_product_exists_by_sku(sku):
+    url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?sku={sku}"
+    response = requests.get(url, headers=shopify_headers)
+    if response.status_code == 200:
+        products = response.json().get("products", [])
+        return len(products) > 0
+    return False
 
 # ----------------------------
 # Main sync logic
@@ -69,6 +84,11 @@ def sync_products():
     for base_sku, items in sku_groups.items():
         print(f"\n🔄 Syncing product for base SKU: {base_sku}")
 
+        # Skip duplicate creation if same SKU already exists on Shopify
+        if shopify_product_exists_by_sku(base_sku):
+            print(f"⚠️ Product {base_sku} already exists on Shopify — skipping duplicate creation.")
+            continue
+
         # Reference product
         product, _ = items[0]
         title = product.get("title", "").replace("#", "").strip()
@@ -89,6 +109,7 @@ def sync_products():
         # Build variants
         valid_variants = []
         option_values = []
+
         for _, v in items:
             v["sku"] = v.get("sku", "").replace("#", "").strip()
             v["inventory_management"] = "shopify"
@@ -103,17 +124,6 @@ def sync_products():
 
         options = [{"name": "Size", "values": option_values}]
         handle = base_sku.lower().strip()
-
-        # Check if product already exists
-        check_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?handle={handle}"
-        check_response = requests.get(check_url, headers=shopify_headers)
-        existing = check_response.json().get("products", [])
-
-        # Prevent duplicate creation
-        if existing:
-            product_id = existing[0]["id"]
-            print(f"⚠️ Product {handle} already exists on Shopify — skipping duplicate creation.")
-            continue  # Skip duplicate
 
         # Build payload
         payload = {
@@ -131,9 +141,21 @@ def sync_products():
             }
         }
 
-        create_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
-        print(f"🆕 Creating new product: {handle}")
-        response = requests.post(create_url, headers=shopify_headers, data=json.dumps(payload))
+        # Check if handle already exists (as backup)
+        check_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?handle={handle}"
+        check_response = requests.get(check_url, headers=shopify_headers)
+        existing = check_response.json().get("products", [])
+
+        if existing:
+            product_id = existing[0]["id"]
+            payload["product"]["id"] = product_id
+            update_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products/{product_id}.json"
+            print(f"🔄 Updating existing product: {handle}")
+            response = requests.put(update_url, headers=shopify_headers, data=json.dumps(payload))
+        else:
+            create_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json"
+            print(f"🆕 Creating new product: {handle}")
+            response = requests.post(create_url, headers=shopify_headers, data=json.dumps(payload))
 
         try:
             print("📦 Shopify response:")
