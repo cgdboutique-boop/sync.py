@@ -26,7 +26,7 @@ shopify_headers = {
 }
 
 # ----------------------------
-# API helper with rate-limit handling
+# API request helper with rate limit handling
 # ----------------------------
 def safe_request(method, url, headers, **kwargs):
     while True:
@@ -59,15 +59,13 @@ def fetch_supplier_products(limit=250):
     return products
 
 # ----------------------------
-# Get Shopify products by vendor
+# Fetch Shopify products for a vendor
 # ----------------------------
 def fetch_shopify_products(vendor="CGD Kids Boutique"):
     all_products = []
-    page_info = None
-    base_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?vendor={vendor}&limit=250"
-
+    page = 1
     while True:
-        url = base_url if not page_info else f"{base_url}&page_info={page_info}"
+        url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?vendor={vendor}&limit=250&page={page}"
         response = safe_request("GET", url, shopify_headers)
         if response.status_code != 200:
             print(f"❌ Shopify fetch error: {response.text}")
@@ -76,15 +74,7 @@ def fetch_shopify_products(vendor="CGD Kids Boutique"):
         if not data:
             break
         all_products.extend(data)
-
-        if "link" in response.headers and "rel=\"next\"" in response.headers["link"]:
-            links = response.headers["link"].split(",")
-            next_links = [x for x in links if 'rel="next"' in x]
-            if next_links:
-                page_info = next_links[0].split("page_info=")[1].split(">")[0]
-                continue
-        break
-
+        page += 1
     print(f"✅ Shopify products fetched for vendor '{vendor}': {len(all_products)}")
     return all_products
 
@@ -120,11 +110,12 @@ def sync_products():
     supplier_products = fetch_supplier_products()
     sku_groups = defaultdict(list)
 
+    # Group supplier products by SKU
     for product in supplier_products:
         for v in product.get("variants", []):
             if not isinstance(v, dict):
                 continue
-            sku = str(v.get("sku", "")).strip().replace("#", "")
+            sku = str(v.get("sku", "")).replace("#", "").strip()
             if not sku or "(200)" in sku:
                 continue
             base_sku = sku.split(" ")[0]
@@ -132,6 +123,7 @@ def sync_products():
 
     print(f"🛍️ Preparing to sync {len(sku_groups)} supplier SKUs")
 
+    # Sync each SKU
     for base_sku, items in sku_groups.items():
         print(f"\n🔄 Syncing base SKU: {base_sku}")
 
@@ -144,11 +136,12 @@ def sync_products():
         images = product.get("images", [])
         handle = base_sku.lower().strip()
 
-        # clean images
+        # Clean images
         for img in images:
             for key in ["id", "product_id", "admin_graphql_api_id", "created_at", "updated_at"]:
                 img.pop(key, None)
 
+        # Build variants
         variants = []
         option_values = []
         for _, v in items:
@@ -157,6 +150,7 @@ def sync_products():
             v["inventory_management"] = "shopify"
             v["inventory_policy"] = "deny"
             v["price"] = v.get("price", "0.00")
+            v["inventory_quantity"] = v.get("inventory_quantity", 0)
             v["option1"] = v.get("option1", "").strip()
             option_values.append(v["option1"])
             variants.append(v)
@@ -178,7 +172,7 @@ def sync_products():
             }
         }
 
-        # Check existing Shopify product
+        # Check if product exists
         url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?handle={handle}"
         resp = safe_request("GET", url, shopify_headers)
         existing = resp.json().get("products", [])
@@ -198,9 +192,8 @@ def sync_products():
         else:
             print(f"❌ Failed to sync {title}: {resp.text}")
 
-    # After syncing, clean duplicates
+    # Delete duplicates after sync
     delete_duplicates("CGD Kids Boutique")
-
 
 # ----------------------------
 # Run sync
