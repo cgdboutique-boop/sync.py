@@ -88,19 +88,21 @@ def sync_products():
     shopify_handle_map = {}
     for p in shopify_products:
         for v in p.get("variants", []):
-            sku = v.get("sku", "").strip()
-            if sku:
-                shopify_sku_map[sku] = p
+            sku = v.get("sku")
+            if isinstance(sku, str):
+                sku = sku.strip()
+                if sku:
+                    shopify_sku_map[sku] = p
         handle = p.get("handle")
-        if handle:
-            shopify_handle_map[handle] = p
+        if isinstance(handle, str):
+            shopify_handle_map[handle.strip()] = p
 
     sku_groups = defaultdict(list)
     for product in supplier_products:
         for v in product.get("variants", []):
-            sku = v.get("sku", "")
-            if not sku:
-                continue
+            sku = v.get("sku")
+            if not isinstance(sku, str) or not sku.strip():
+                continue  # skip empty or invalid SKUs
             sku = sku.replace("#", "").strip()
             if "(200)" in sku:
                 continue
@@ -112,29 +114,39 @@ def sync_products():
     for base_sku, items in sku_groups.items():
         print(f"\n🔄 Syncing base SKU: {base_sku}")
         product, _ = items[0]
-        title = product.get("title", "").replace("#", "").strip()
+        title = (product.get("title") or "").replace("#", "").strip()
         body_html = product.get("body_html", "")
         product_type = product.get("product_type", "")
         tags = product.get("tags", "")
         status = product.get("status", "active")
         images = product.get("images", [])
         for img in images:
+            if not isinstance(img, dict):
+                continue
             for key in ["id", "product_id", "admin_graphql_api_id", "created_at", "updated_at"]:
                 img.pop(key, None)
 
         valid_variants = []
         option_values = []
         for _, v in items:
-            v["sku"] = v.get("sku", "").replace("#", "").strip()
+            sku = v.get("sku")
+            if not isinstance(sku, str) or not sku.strip():
+                continue
+            v["sku"] = sku.replace("#", "").strip()
             v["inventory_management"] = "shopify"
             v["inventory_policy"] = "deny"
             v["price"] = v.get("price", "0.00")
             v["inventory_quantity"] = v.get("inventory_quantity", 0)
-            v["option1"] = v.get("option1", "").strip()
+            v["option1"] = (v.get("option1") or "").strip()
             for key in ["id", "product_id", "inventory_item_id", "admin_graphql_api_id", "created_at", "updated_at"]:
                 v.pop(key, None)
             valid_variants.append(v)
-            option_values.append(v["option1"])
+            if v["option1"]:
+                option_values.append(v["option1"])
+
+        if not valid_variants:
+            print(f"⚠️ No valid variants for {base_sku}, skipping.")
+            continue
 
         options = [{"name": "Size", "values": option_values}]
         handle = base_sku.lower().strip()
@@ -194,12 +206,12 @@ def cleanup_duplicates(vendor_name):
 
     for p in products:
         for v in p.get("variants", []):
-            sku = v.get("sku", "").strip()
-            if sku:
-                sku_map[sku].append(p)
+            sku = v.get("sku")
+            if isinstance(sku, str) and sku.strip():
+                sku_map[sku.strip()].append(p)
         handle = p.get("handle")
-        if handle:
-            handle_map[handle].append(p)
+        if isinstance(handle, str) and handle.strip():
+            handle_map[handle.strip()].append(p)
 
     def delete_older(items, key_name):
         for key, prods in items.items():
