@@ -40,11 +40,9 @@ def fetch_supplier_products(limit=250):
         if response.status_code != 200:
             print(f"❌ Supplier API error (since_id {since_id}): {response.text}")
             break
-
         data = response.json().get("products", [])
         if not data:
             break
-
         products.extend(data)
         since_id = max([p["id"] for p in data])
         print(f"📥 Fetched {len(data)} products (since_id: {since_id})")
@@ -52,12 +50,11 @@ def fetch_supplier_products(limit=250):
     return products
 
 # ----------------------------
-# Fetch all Shopify products with pagination
+# Fetch all Shopify products
 # ----------------------------
 def fetch_all_shopify_products():
     products = []
     url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?limit=250"
-
     while url:
         response = requests.get(url, headers=shopify_headers)
         if response.status_code != 200:
@@ -65,8 +62,6 @@ def fetch_all_shopify_products():
             break
         data = response.json().get("products", [])
         products.extend(data)
-
-        # Pagination via Link header
         link_header = response.headers.get("Link")
         next_url = None
         if link_header:
@@ -78,21 +73,17 @@ def fetch_all_shopify_products():
         url = next_url
         if url:
             time.sleep(RATE_LIMIT_DELAY)
-
     print(f"✅ Total Shopify products fetched: {len(products)}")
     return products
 
 # ----------------------------
-# Sync products to Shopify
+# Sync supplier products to Shopify
 # ----------------------------
 def sync_products():
     supplier_products = fetch_supplier_products()
     shopify_products = fetch_all_shopify_products()
-
-    # Filter only this vendor
     shopify_products = [p for p in shopify_products if p.get("vendor") == VENDOR_NAME]
 
-    # Map Shopify products by SKU and handle
     shopify_sku_map = {}
     shopify_handle_map = {}
     for p in shopify_products:
@@ -104,7 +95,6 @@ def sync_products():
         if handle:
             shopify_handle_map[handle] = p
 
-    # Group supplier products by base SKU
     sku_groups = defaultdict(list)
     for product in supplier_products:
         for v in product.get("variants", []):
@@ -119,13 +109,8 @@ def sync_products():
 
     synced_handles = []
 
-    # ----------------------------
-    # Main sync loop
-    # ----------------------------
     for base_sku, items in sku_groups.items():
         print(f"\n🔄 Syncing base SKU: {base_sku}")
-
-        # Reference product
         product, _ = items[0]
         title = product.get("title", "").replace("#", "").strip()
         body_html = product.get("body_html", "")
@@ -133,16 +118,12 @@ def sync_products():
         tags = product.get("tags", "")
         status = product.get("status", "active")
         images = product.get("images", [])
-
-        # Clean images
         for img in images:
             for key in ["id", "product_id", "admin_graphql_api_id", "created_at", "updated_at"]:
                 img.pop(key, None)
 
-        # Build variants
         valid_variants = []
         option_values = []
-
         for _, v in items:
             v["sku"] = v.get("sku", "").replace("#", "").strip()
             v["inventory_management"] = "shopify"
@@ -157,8 +138,6 @@ def sync_products():
 
         options = [{"name": "Size", "values": option_values}]
         handle = base_sku.lower().strip()
-
-        # Build payload
         payload = {
             "product": {
                 "title": title,
@@ -174,9 +153,6 @@ def sync_products():
             }
         }
 
-        # ----------------------------
-        # Check if product exists (by SKU or handle)
-        # ----------------------------
         existing_product = shopify_sku_map.get(base_sku) or shopify_handle_map.get(handle)
 
         if existing_product:
@@ -191,11 +167,8 @@ def sync_products():
             response = requests.post(create_url, headers=shopify_headers, data=json.dumps(payload))
 
         try:
-            res_json = response.json()
-            print("📦 Shopify response:")
-            print(json.dumps(res_json, indent=2))
-        except Exception:
-            print("❌ Failed to parse Shopify response:")
+            print(json.dumps(response.json(), indent=2))
+        except:
             print(response.text)
 
         if response.status_code in [200, 201]:
@@ -206,13 +179,10 @@ def sync_products():
 
         time.sleep(RATE_LIMIT_DELAY)
 
-    # ----------------------------
-    # Cleanup duplicates by SKU & handle for this vendor
-    # ----------------------------
     cleanup_duplicates(VENDOR_NAME)
 
 # ----------------------------
-# Delete duplicates only for this vendor
+# Delete duplicates for this vendor
 # ----------------------------
 def cleanup_duplicates(vendor_name):
     print(f"\n🔍 Cleaning duplicates for vendor: {vendor_name}")
@@ -248,4 +218,11 @@ def cleanup_duplicates(vendor_name):
                     print(f"❌ Failed to delete {key_name}: {key} (product id {product_id}) - {response.text}")
                 time.sleep(RATE_LIMIT_DELAY)
 
-    delete_older(sku_map
+    delete_older(sku_map, "SKU")
+    delete_older(handle_map, "Handle")
+
+# ----------------------------
+# Run sync
+# ----------------------------
+if __name__ == "__main__":
+    sync_products()
