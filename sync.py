@@ -62,90 +62,22 @@ return products
 
 # ----------------------------
 
-# Fetch existing Shopify products for vendor
-
-# ----------------------------
-
-def fetch_shopify_vendor_products(vendor_name):
-products = []
-page = 1
-while True:
-url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?vendor={vendor_name}&limit=250&page={page}"
-response = requests.get(url, headers=shopify_headers)
-if response.status_code != 200:
-print(f"❌ Shopify fetch error: {response.text}")
-break
-data = response.json().get("products", [])
-if not data:
-break
-products.extend(data)
-page += 1
-print(f"✅ Total Shopify products fetched for vendor '{vendor_name}': {len(products)}")
-return products
-
-# ----------------------------
-
-# Delete duplicate products by SKU or handle (vendor only)
-
-# ----------------------------
-
-def delete_duplicates(products):
-sku_map = defaultdict(list)
-handle_map = defaultdict(list)
-
-```
-for p in products:
-    handle = p.get("handle")
-    for v in p.get("variants", []):
-        sku = v.get("sku")
-        if sku:
-            sku_map[sku].append(p)
-    if handle:
-        handle_map[handle].append(p)
-
-# Delete duplicate SKUs
-for sku, plist in sku_map.items():
-    if len(plist) > 1:
-        keep = plist[0]
-        to_delete = plist[1:]
-        for pd in to_delete:
-            delete_product(pd["id"], sku)
-
-# Delete duplicate Handles
-for handle, plist in handle_map.items():
-    if len(plist) > 1:
-        keep = plist[0]
-        to_delete = plist[1:]
-        for pd in to_delete:
-            delete_product(pd["id"], handle)
-```
-
-def delete_product(product_id, identifier):
-url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products/{product_id}.json"
-response = requests.delete(url, headers=shopify_headers)
-if response.status_code == 200 or response.status_code == 204:
-print(f"✅ Deleted duplicate product: {identifier}")
-else:
-print(f"❌ Failed to delete product {identifier}: {response.text}")
-
-# ----------------------------
-
 # Main sync logic
 
 # ----------------------------
 
 def sync_products():
-supplier_products = fetch_supplier_products()
-shopify_products = fetch_shopify_vendor_products(VENDOR_NAME)
-delete_duplicates(shopify_products)
-
-```
+products = fetch_supplier_products()
 sku_groups = defaultdict(list)
 
-for product in supplier_products:
+```
+# Group by SKU
+for product in products:
     for v in product.get("variants", []):
+        if not isinstance(v, dict):
+            continue
         sku = v.get("sku")
-        if not sku or not isinstance(sku, str):
+        if not isinstance(sku, str):
             continue
         sku = sku.replace("#", "").strip()
         if "(200)" in sku or not sku:
@@ -155,6 +87,7 @@ for product in supplier_products:
 
 synced_handles = []
 
+# Sync each SKU group
 for base_sku, items in sku_groups.items():
     print(f"\n🔄 Syncing product for base SKU: {base_sku}")
 
@@ -180,10 +113,7 @@ for base_sku, items in sku_groups.items():
     option_values = []
 
     for _, v in items:
-        sku = v.get("sku")
-        if not sku:
-            continue
-        v["sku"] = sku.replace("#", "").strip()
+        v["sku"] = v.get("sku", "").replace("#", "").strip()
         v["inventory_management"] = "shopify"
         v["inventory_policy"] = "deny"
         v["price"] = v.get("price", "0.00")
@@ -213,7 +143,7 @@ for base_sku, items in sku_groups.items():
         }
     }
 
-    # Check if product exists by handle
+    # Check if product exists
     check_url = f"https://{SHOPIFY_STORE}/admin/api/2025-07/products.json?handle={handle}"
     check_response = requests.get(check_url, headers=shopify_headers)
     existing = check_response.json().get("products", [])
@@ -242,6 +172,7 @@ for base_sku, items in sku_groups.items():
     else:
         print(f"❌ Failed to sync: {title} ({response.status_code})")
 
+# Duplicate handle report
 print("\n📊 Duplicate Handle Check Report")
 counts = Counter(synced_handles)
 for handle, count in counts.items():
