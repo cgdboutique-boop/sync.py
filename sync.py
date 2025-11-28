@@ -30,8 +30,6 @@ shopify_headers = {
 "Content-Type": "application/json"
 }
 
-VENDOR_NAME = "CGD Kids Boutique"
-
 # ----------------------------
 
 # Fetch supplier products using since_id pagination
@@ -41,21 +39,25 @@ VENDOR_NAME = "CGD Kids Boutique"
 def fetch_supplier_products(limit=250):
 products = []
 since_id = 0
-while True:
-params = {"limit": limit, "since_id": since_id}
-response = requests.get(SUPPLIER_API_URL, headers=supplier_headers, params=params)
-if response.status_code != 200:
-print(f"❌ Supplier API error (since_id {since_id}): {response.text}")
-break
 
 ```
+while True:
+    params = {"limit": limit, "since_id": since_id}
+    response = requests.get(SUPPLIER_API_URL, headers=supplier_headers, params=params)
+
+    if response.status_code != 200:
+        print(f"❌ Supplier API error (since_id {since_id}): {response.text}")
+        break
+
     data = response.json().get("products", [])
     if not data:
         break
 
     products.extend(data)
     print(f"📥 Fetched {len(data)} products from supplier (since_id: {since_id})")
+
     since_id = max([p.get("id", 0) for p in data])
+
 print(f"✅ Total supplier products fetched: {len(products)}")
 return products
 ```
@@ -71,23 +73,24 @@ products = fetch_supplier_products()
 sku_groups = defaultdict(list)
 
 ```
-# Group by SKU
 for product in products:
     for v in product.get("variants", []):
         if not isinstance(v, dict):
             continue
+
         sku = v.get("sku")
         if not isinstance(sku, str):
             continue
+
         sku = sku.replace("#", "").strip()
         if "(200)" in sku or not sku:
             continue
+
         base_sku = sku.split(" ")[0]
         sku_groups[base_sku].append((product, v))
 
 synced_handles = []
 
-# Sync each SKU group
 for base_sku, items in sku_groups.items():
     print(f"\n🔄 Syncing product for base SKU: {base_sku}")
 
@@ -95,7 +98,7 @@ for base_sku, items in sku_groups.items():
     product, _ = items[0]
     title = product.get("title", "").replace("#", "").strip()
     body_html = product.get("body_html", "")
-    vendor = VENDOR_NAME
+    vendor = "CGD Kids Boutique"
     product_type = product.get("product_type", "")
     tags = product.get("tags", "")
     status = product.get("status", "active")
@@ -113,14 +116,20 @@ for base_sku, items in sku_groups.items():
     option_values = []
 
     for _, v in items:
-        v["sku"] = v.get("sku", "").replace("#", "").strip()
+        sku_val = v.get("sku")
+        if not isinstance(sku_val, str):
+            continue
+        v["sku"] = sku_val.replace("#", "").strip()
         v["inventory_management"] = "shopify"
         v["inventory_policy"] = "deny"
         v["price"] = v.get("price", "0.00")
         v["inventory_quantity"] = v.get("inventory_quantity", 0)
         v["option1"] = v.get("option1", "").strip()
+
+        # Remove Shopify-only keys
         for key in ["id", "product_id", "inventory_item_id", "admin_graphql_api_id", "created_at", "updated_at"]:
             v.pop(key, None)
+
         valid_variants.append(v)
         option_values.append(v["option1"])
 
@@ -172,7 +181,9 @@ for base_sku, items in sku_groups.items():
     else:
         print(f"❌ Failed to sync: {title} ({response.status_code})")
 
-# Duplicate handle report
+# ----------------------------
+# Duplicate check report
+# ----------------------------
 print("\n📊 Duplicate Handle Check Report")
 counts = Counter(synced_handles)
 for handle, count in counts.items():
