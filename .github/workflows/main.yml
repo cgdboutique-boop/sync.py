@@ -1,9 +1,9 @@
 name: Sync Products
 
 on:
-  workflow_dispatch:   # Manual trigger
+  workflow_dispatch:
   schedule:
-    - cron: "0 2 * * *"   # Daily at 2 AM
+    - cron: "0 2 * * *"
 
 concurrency:
   group: "sync-products"
@@ -12,7 +12,7 @@ concurrency:
 jobs:
   sync-products:
     runs-on: ubuntu-latest
-    timeout-minutes: 360   # 6 hours max
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repository
@@ -36,7 +36,7 @@ jobs:
 
       - name: Upload supplier_raw.json
         if: success()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: supplier-json
           path: supplier_raw.json
