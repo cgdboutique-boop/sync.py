@@ -1,12 +1,12 @@
 name: Sync Products
 
 on:
-workflow_dispatch:   # Manual trigger
+workflow_dispatch:      # Manual trigger
 schedule:
 - cron: "0 2 * * *"   # Daily at 2 AM
 
 concurrency:
-group: "sync-products"
+group: sync-products
 cancel-in-progress: false
 
 jobs:
@@ -19,7 +19,7 @@ steps:
   - name: Checkout repository
     uses: actions/checkout@v3
 
-  - name: Set up Python
+  - name: Set up Python 3.10
     uses: actions/setup-python@v4
     with:
       python-version: "3.10"
