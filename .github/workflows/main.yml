@@ -1,42 +1,44 @@
 name: Sync Products
 
 on:
-  workflow_dispatch:   # Manual trigger
-  schedule:
-    - cron: "0 2 * * *"   # Daily at 2 AM
+workflow_dispatch:   # Manual trigger
+schedule:
+- cron: "0 2 * * *"   # Daily at 2 AM
 
 concurrency:
-  group: "sync-products"
-  cancel-in-progress: false
+group: sync-products
+cancel-in-progress: false
 
 jobs:
-  sync-products:
-    runs-on: ubuntu-latest
-    timeout-minutes: 360   # 6 hours max
+sync-products:
+runs-on: ubuntu-latest
+timeout-minutes: 360   # 6 hours max
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+```
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.10"
+  - name: Set up Python
+    uses: actions/setup-python@v4
+    with:
+      python-version: "3.10"
 
-      - name: Install dependencies
-        run: pip install requests
+  - name: Install dependencies
+    run: pip install requests
 
-      - name: Run FULL sync
-        env:
-          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
-          SHOPIFY_TOKEN: ${{ secrets.SHOPIFY_TOKEN }}
-          SUPPLIER_API_URL: ${{ secrets.SUPPLIER_API_URL }}
-          SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
-        run: python sync.py
+  - name: Run FULL sync
+    env:
+      SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+      SHOPIFY_TOKEN: ${{ secrets.SHOPIFY_TOKEN }}
+      SUPPLIER_API_URL: ${{ secrets.SUPPLIER_API_URL }}
+      SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
+    run: python sync.py
 
-      - name: Upload supplier_raw.json
-        if: success()
-        uses: actions/upload-artifact@v3
-        with:
-          name: supplier-json
-          path: supplier_raw.json
+  - name: Upload supplier_raw.json
+    if: success()
+    uses: actions/upload-artifact@v4
+    with:
+      name: supplier-json
+      path: supplier_raw.json
+```
