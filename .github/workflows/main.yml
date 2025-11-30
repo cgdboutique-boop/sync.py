@@ -34,11 +34,4 @@ steps:
       SUPPLIER_API_URL: ${{ secrets.SUPPLIER_API_URL }}
       SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
     run: python sync.py
-
-  - name: Upload supplier_raw.json
-    if: success()
-    uses: actions/upload-artifact@v4
-    with:
-      name: supplier-json
-      path: supplier_raw.json
 ```
