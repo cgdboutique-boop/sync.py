@@ -33,3 +33,9 @@ jobs:
           SUPPLIER_API_URL: ${{ secrets.SUPPLIER_API_URL }}
           SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
         run: python sync.py
+
+- name: Upload supplier_raw.json
+  uses: actions/upload-artifact@v3
+  with:
+    name: supplier-json
+    path: supplier_raw.json
