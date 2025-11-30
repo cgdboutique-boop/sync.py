@@ -1,47 +1,42 @@
-import os
-import json
-import requests
+name: Sync Products
 
-# Supplier credentials from environment
-SUPPLIER_API_URL = os.environ["SUPPLIER_API_URL"]
-SUPPLIER_TOKEN = os.environ["SUPPLIER_TOKEN"]
+on:
+  workflow_dispatch:   # Manual trigger
+  schedule:
+    - cron: "0 2 * * *"   # Daily at 2 AM
 
-supplier_headers = {
-    "X-Shopify-Access-Token": SUPPLIER_TOKEN,
-    "Accept": "application/json"
-}
+concurrency:
+  group: "sync-products"
+  cancel-in-progress: false
 
-def fetch_all_supplier_products(limit=250):
-    products = []
-    since_id = 0
+jobs:
+  sync-products:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360   # 6 hours max
 
-    while True:
-        params = {"limit": limit, "since_id": since_id}
-        response = requests.get(SUPPLIER_API_URL, headers=supplier_headers, params=params)
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-        if response.status_code != 200:
-            print("❌ Supplier API error:", response.text)
-            break
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
 
-        batch = response.json().get("products", [])
-        if not batch:
-            break
+      - name: Install dependencies
+        run: pip install requests
 
-        products.extend(batch)
-        since_id = max([p["id"] for p in batch])
+      - name: Run FULL sync
+        env:
+          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_TOKEN: ${{ secrets.SHOPIFY_TOKEN }}
+          SUPPLIER_API_URL: ${{ secrets.SUPPLIER_API_URL }}
+          SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
+        run: python sync.py
 
-    return products
-
-
-if __name__ == "__main__":
-    print("📥 Fetching all supplier products...")
-    products = fetch_all_supplier_products()
-
-    print(f"✅ Total products received: {len(products)}")
-
-    # Save full JSON for inspection
-    with open("supplier_raw.json", "w", encoding="utf-8") as f:
-        json.dump(products, f, indent=2, ensure_ascii=False)
-
-    print("📄 Saved full supplier JSON to supplier_raw.json")
-    print("👉 Upload that file here so I can inspect entries like 10020036.")
+      - name: Upload supplier_raw.json
+        if: success()
+        uses: actions/upload-artifact@v3
+        with:
+          name: supplier-json
+          path: supplier_raw.json
