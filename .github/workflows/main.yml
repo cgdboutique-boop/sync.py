@@ -1,18 +1,18 @@
 name: Sync Products
 
 on:
-workflow_dispatch:   # Manual trigger
+workflow_dispatch:
 schedule:
-- cron: "0 2 * * *"   # Daily at 2 AM
+- cron: "0 2 * * *"
 
 concurrency:
-group: "sync-products"
+group: sync-products
 cancel-in-progress: false
 
 jobs:
 sync-products:
 runs-on: ubuntu-latest
-timeout-minutes: 360   # 6 hours max
+timeout-minutes: 360
 
 ```
 steps:
@@ -35,8 +35,8 @@ steps:
       SUPPLIER_TOKEN: ${{ secrets.SUPPLIER_TOKEN }}
     run: python sync.py
 
-  - name: Upload supplier_raw.json
-    if: success()
+  - name: Upload supplier JSON
+    if: ${{ success() }}
     uses: actions/upload-artifact@v4
     with:
       name: supplier-json
