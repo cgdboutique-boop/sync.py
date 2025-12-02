@@ -1,6 +1,10 @@
 import os
 import json
 import requests
+import certifi  # add this
+
+# --- Ensure requests uses a proper certificate bundle ---
+os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 # --- Environment variables ---
 SUPPLIER_API_URL = os.environ["SUPPLIER_API_URL"]
@@ -63,8 +67,7 @@ def sync_product_to_shopify(product):
                     "inventory_quantity": v.get("inventory_quantity", 0),
                     "sku": v.get("sku", ""),
                     "requires_shipping": v.get("requires_shipping", True)
-                }
-                for v in product.get("variants", [])
+                } for v in product.get("variants", [])
             ]
         }
     }
@@ -86,7 +89,6 @@ if __name__ == "__main__":
     # Save raw JSON
     with open("supplier_raw.json", "w", encoding="utf-8") as f:
         json.dump(products, f, indent=2, ensure_ascii=False)
-
     print("📄 Saved full supplier JSON to supplier_raw.json")
 
     print("🔄 Starting Shopify sync...")
