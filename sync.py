@@ -1,9 +1,9 @@
 import os
 import json
 import requests
-import certifi  # add this
+import certifi
 
-# --- Ensure requests uses a proper certificate bundle ---
+# --- Force requests to use certifi CA bundle ---
 os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 # --- Environment variables ---
