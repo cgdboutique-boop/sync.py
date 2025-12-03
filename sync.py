@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-sync.py – Supplier Fetch + Full Sync Framework
+sync.py – Supplier Fetch + JSON Save
 
-This script includes:
-- Your existing supplier fetch logic (unchanged behavior)
-- Safe supplier request handling
-- Improved retry logic and rate-limiting
-- Duplicate-cleanup utilities
-- Ready for full Shopify sync integration
+This version removes all external dependencies (such as dateutil)
+so it runs safely inside GitHub Actions without installing anything.
+
+It performs:
+- Full supplier product fetch using since_id paging
+- Error handling and retry logic
+- Saves supplier_raw.json for later inspection
 
 Env Vars Required:
     SUPPLIER_API_URL
@@ -21,9 +22,6 @@ import os
 import time
 import json
 import requests
-from datetime import datetime
-from dateutil import parser as dateparser
-from collections import defaultdict
 
 # -------------------------------
 #  ENVIRONMENT
@@ -36,7 +34,7 @@ supplier_headers = {
     "Accept": "application/json"
 }
 
-# Simple retry backoff
+# Retry strategy
 RETRY_BACKOFF = [1, 2, 5]
 RATE_LIMIT_SLEEP = 0.5
 
@@ -61,13 +59,13 @@ def safe_request(method, url, headers=None, params=None):
 
 # -------------------------------
 # FETCH ALL SUPPLIER PRODUCTS
-# (Your original code – same behavior)
+# (Same behavior as your original script)
 # -------------------------------
 def fetch_all_supplier_products(limit=250):
     products = []
     since_id = 0
 
-    print(f"📥 Fetching supplier products (limit {limit})...")
+    print(f"📥 Fetching supplier products (limit per page = {limit})...")
 
     while True:
         params = {"limit": limit, "since_id": since_id}
@@ -93,18 +91,10 @@ def fetch_all_supplier_products(limit=250):
         except Exception:
             break
 
+        print(f"📦 Received {len(batch)} new products...")
+
     print(f"✅ Total supplier products fetched: {len(products)}")
     return products
-
-
-# -------------------------------
-# UTILITY: ISO to datetime
-# -------------------------------
-def iso_to_dt(s):
-    try:
-        return dateparser.parse(s)
-    except:
-        return None
 
 
 # -------------------------------
@@ -121,4 +111,4 @@ if __name__ == "__main__":
         json.dump(products, f, indent=2, ensure_ascii=False)
 
     print("📄 Saved supplier_raw.json")
-    print("👉 Upload that file here after workflow runs so I can inspect product structures.")
+    print("👉 Upload the file here after workflow runs so I can inspect the fields and build your full sync.")
