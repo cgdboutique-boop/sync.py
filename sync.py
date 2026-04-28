@@ -2,6 +2,7 @@
 
 import os
 import time
+import json
 import re
 import requests
 
@@ -44,6 +45,12 @@ def clean(text):
     text = re.sub(r'<[^>]+>', '', text or '')
     return re.sub(r'\s+', ' ', text).strip()
 
+def safe_title(text):
+    text = clean(text)
+    if not text:
+        return "Untitled Product"
+    return text[:70]
+
 # ---------- Fetch ----------
 def get_supplier_products():
     r = safe_request("GET", SUPPLIER_API_URL, headers=supplier_headers)
@@ -52,77 +59,28 @@ def get_supplier_products():
         return []
     return r.json().get("products", [])
 
-def get_all_shopify_products():
-    products = []
-    since_id = 0
-
-    while True:
-        url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
-        params = {"limit": 250, "since_id": since_id}
-        r = safe_request("GET", url, headers=shopify_headers, params=params)
-
-        if not r or r.status_code != 200:
-            break
-
-        batch = r.json().get("products", [])
-        if not batch:
-            break
-
-        products.extend(batch)
-        since_id = max([p["id"] for p in batch])
-
-    return products
-
-# ---------- Index ----------
-def build_index(products):
-    idx = {"tag": {}, "sku": {}}
-
-    for p in products:
-        tags = p.get("tags", "")
-        for t in tags.split(","):
-            t = t.strip()
-            if t.startswith("supplier:"):
-                idx["tag"][t] = p
-
-        for v in p.get("variants", []):
-            sku = (v.get("sku") or "").strip()
-            if sku:
-                idx["sku"][sku] = p
-
-    return idx
-
-# ---------- Inventory ----------
-def update_inventory(inventory_item_id, quantity):
-    url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/inventory_levels/set.json"
-    payload = {
-        "location_id": 1,  # ⚠️ You may need to change this
-        "inventory_item_id": inventory_item_id,
-        "available": quantity
-    }
-    safe_request("POST", url, headers=shopify_headers, json=payload)
-
 # ---------- Build payload ----------
 def build_payload(sp):
     supplier_id = sp.get("id")
     tag = f"supplier:{supplier_id}"
 
-    title = clean(sp.get("title") or "")[:70]
-    desc = clean(sp.get("body_html") or "")
+    title = safe_title(sp.get("title"))
+    desc = clean(sp.get("body_html"))
 
     variants = []
     for i, v in enumerate(sp.get("variants", [])):
         sku = (v.get("sku") or "").strip() or f"{supplier_id}-{i+1}"
+        price = str(v.get("price") or "0.00")
+
         variants.append({
             "sku": sku,
-            "price": str(v.get("price") or "0.00"),
-            "inventory_management": "shopify"
+            "price": price
         })
 
     images = []
     for img in sp.get("images", []):
-        src = img.get("src")
-        if src:
-            images.append({"src": src})
+        if img.get("src"):
+            images.append({"src": img["src"]})
 
     return {
         "product": {
@@ -135,81 +93,45 @@ def build_payload(sp):
         }
     }
 
-# ---------- Create / Update ----------
+# ---------- Create ----------
 def create_product(payload):
     url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
     return safe_request("POST", url, headers=shopify_headers, json=payload)
 
-def update_product(pid, payload):
-    url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products/{pid}.json"
-    return safe_request("PUT", url, headers=shopify_headers, json=payload)
-
 # ---------- Main ----------
 def sync():
     supplier = get_supplier_products()
-    shopify = get_all_shopify_products()
-    idx = build_index(shopify)
 
-    created = updated = skipped = 0
+    created = 0
+    failed = 0
 
     for sp in supplier:
         sid = sp.get("id")
         if not sid:
-            skipped += 1
             continue
 
-        tag = f"supplier:{sid}"
         payload = build_payload(sp)
 
-        found = idx["tag"].get(tag)
+        print(f"🆕 Creating product {sid}")
 
-        if not found:
-            for v in sp.get("variants", []):
-                sku = (v.get("sku") or "").strip()
-                if sku and sku in idx["sku"]:
-                    found = idx["sku"][sku]
-                    break
+        res = create_product(payload)
 
-        if found:
-            res = update_product(found["id"], payload)
-
-            if res and res.status_code in (200, 201):
-                updated += 1
-
-                # update stock
-                product = res.json().get("product", {})
-                for v in product.get("variants", []):
-                    qty = 10  # ⚠️ Replace with supplier stock if available
-                    update_inventory(v["inventory_item_id"], qty)
-
-            else:
-                print(f"⚠️ Update failed for {sid}")
-
+        if res and res.status_code in (200, 201):
+            created += 1
         else:
-            print(f"🆕 Creating product {sid}")
-            res = create_product(payload)
+            failed += 1
+            print(f"❌ Create failed for {sid}")
 
-            if res and res.status_code in (200, 201):
-                created += 1
-                newp = res.json().get("product")
-
-                if newp:
-                    shopify.append(newp)
-                    idx = build_index(shopify)
-
-                    # set stock
-                    for v in newp.get("variants", []):
-                        qty = 10  # ⚠️ Replace with supplier stock
-                        update_inventory(v["inventory_item_id"], qty)
-
-            else:
-                print(f"❌ Create failed for {sid}")
+            # 🔥 CRITICAL: show real Shopify error
+            try:
+                print("STATUS:", res.status_code)
+                print("RESPONSE:", res.text)
+            except Exception as e:
+                print("No response:", e)
 
     print("\n--- SYNC COMPLETE ---")
-    print(f"Created: {created}")
-    print(f"Updated: {updated}")
-    print(f"Skipped: {skipped}")
+    print("Created:", created)
+    print("Failed:", failed)
 
-# ---------- Run ----------
 if __name__ == "__main__":
     sync()
