@@ -2,7 +2,6 @@
 
 import os
 import time
-import json
 import re
 import requests
 
@@ -47,11 +46,9 @@ def clean(text):
 
 def safe_title(text):
     text = clean(text)
-    if not text:
-        return "Untitled Product"
-    return text[:70]
+    return text[:70] if text else "Untitled Product"
 
-# ---------- Fetch ----------
+# ---------- Fetch supplier ----------
 def get_supplier_products():
     r = safe_request("GET", SUPPLIER_API_URL, headers=supplier_headers)
     if not r or r.status_code != 200:
@@ -62,21 +59,23 @@ def get_supplier_products():
 # ---------- Build payload ----------
 def build_payload(sp):
     supplier_id = sp.get("id")
-    tag = f"supplier:{supplier_id}"
 
     title = safe_title(sp.get("title"))
     desc = clean(sp.get("body_html"))
 
+    # 🔥 FIXED VARIANT STRUCTURE (THIS WAS YOUR ERROR)
     variants = []
     for i, v in enumerate(sp.get("variants", [])):
         sku = (v.get("sku") or "").strip() or f"{supplier_id}-{i+1}"
         price = str(v.get("price") or "0.00")
 
         variants.append({
-            "sku": sku,
-            "price": price
+            "option1": "Default Title",
+            "price": price,
+            "sku": sku
         })
 
+    # images
     images = []
     for img in sp.get("images", []):
         if img.get("src"):
@@ -87,7 +86,7 @@ def build_payload(sp):
             "title": title,
             "body_html": desc,
             "vendor": TARGET_VENDOR,
-            "tags": tag,
+            "tags": f"supplier:{supplier_id}",
             "variants": variants,
             "images": images
         }
@@ -105,6 +104,8 @@ def sync():
     created = 0
     failed = 0
 
+    print(f"🔄 Supplier products found: {len(supplier)}")
+
     for sp in supplier:
         sid = sp.get("id")
         if not sid:
@@ -121,13 +122,11 @@ def sync():
         else:
             failed += 1
             print(f"❌ Create failed for {sid}")
-
-            # 🔥 CRITICAL: show real Shopify error
             try:
                 print("STATUS:", res.status_code)
                 print("RESPONSE:", res.text)
-            except Exception as e:
-                print("No response:", e)
+            except:
+                pass
 
     print("\n--- SYNC COMPLETE ---")
     print("Created:", created)
