@@ -2,8 +2,6 @@
 
 import os
 import time
-import json
-import argparse
 import re
 import requests
 
@@ -93,36 +91,38 @@ def build_index(products):
 
     return idx
 
-# ---------- Extra safety ----------
-def check_shopify_by_tag(tag):
-    url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
-    params = {"limit": 250, "fields": "id,tags"}
-    r = safe_request("GET", url, headers=shopify_headers, params=params)
-
-    if not r or r.status_code != 200:
-        return None
-
-    for p in r.json().get("products", []):
-        if tag in p.get("tags", ""):
-            return p
-
-    return None
+# ---------- Inventory ----------
+def update_inventory(inventory_item_id, quantity):
+    url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/inventory_levels/set.json"
+    payload = {
+        "location_id": 1,  # ⚠️ You may need to change this
+        "inventory_item_id": inventory_item_id,
+        "available": quantity
+    }
+    safe_request("POST", url, headers=shopify_headers, json=payload)
 
 # ---------- Build payload ----------
 def build_payload(sp):
     supplier_id = sp.get("id")
     tag = f"supplier:{supplier_id}"
 
-    title = clean(sp.get("body_html") or "")[:70]
-    desc = clean(sp.get("title") or "")
+    title = clean(sp.get("title") or "")[:70]
+    desc = clean(sp.get("body_html") or "")
 
     variants = []
     for i, v in enumerate(sp.get("variants", [])):
         sku = (v.get("sku") or "").strip() or f"{supplier_id}-{i+1}"
         variants.append({
             "sku": sku,
-            "price": str(v.get("price") or "0.00")
+            "price": str(v.get("price") or "0.00"),
+            "inventory_management": "shopify"
         })
+
+    images = []
+    for img in sp.get("images", []):
+        src = img.get("src")
+        if src:
+            images.append({"src": src})
 
     return {
         "product": {
@@ -130,7 +130,8 @@ def build_payload(sp):
             "body_html": desc,
             "vendor": TARGET_VENDOR,
             "tags": tag,
-            "variants": variants
+            "variants": variants,
+            "images": images
         }
     }
 
@@ -162,7 +163,6 @@ def sync():
 
         found = idx["tag"].get(tag)
 
-        # SKU fallback
         if not found:
             for v in sp.get("variants", []):
                 sku = (v.get("sku") or "").strip()
@@ -170,16 +170,21 @@ def sync():
                     found = idx["sku"][sku]
                     break
 
-        # FINAL safety check (live Shopify)
-        if not found:
-            found = check_shopify_by_tag(tag)
-
         if found:
             res = update_product(found["id"], payload)
+
             if res and res.status_code in (200, 201):
                 updated += 1
+
+                # update stock
+                product = res.json().get("product", {})
+                for v in product.get("variants", []):
+                    qty = 10  # ⚠️ Replace with supplier stock if available
+                    update_inventory(v["inventory_item_id"], qty)
+
             else:
                 print(f"⚠️ Update failed for {sid}")
+
         else:
             print(f"🆕 Creating product {sid}")
             res = create_product(payload)
@@ -188,13 +193,19 @@ def sync():
                 created += 1
                 newp = res.json().get("product")
 
-                # FULL index update (critical fix)
                 if newp:
-                    idx = build_index(shopify + [newp])
+                    shopify.append(newp)
+                    idx = build_index(shopify)
+
+                    # set stock
+                    for v in newp.get("variants", []):
+                        qty = 10  # ⚠️ Replace with supplier stock
+                        update_inventory(v["inventory_item_id"], qty)
+
             else:
                 print(f"❌ Create failed for {sid}")
 
-    print("\n--- SAFE SYNC COMPLETE ---")
+    print("\n--- SYNC COMPLETE ---")
     print(f"Created: {created}")
     print(f"Updated: {updated}")
     print(f"Skipped: {skipped}")
