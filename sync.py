@@ -5,7 +5,7 @@ import time
 import re
 import requests
 
-# ---------- Config ----------
+# ---------- CONFIG ----------
 SHOPIFY_API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2025-07")
 TARGET_VENDOR = "CGD Kids Boutique"
 RATE_LIMIT_SLEEP = 0.6
@@ -29,17 +29,19 @@ supplier_headers = {
     "Accept": "application/json"
 }
 
-# ---------- Helpers ----------
+# ---------- REQUEST ----------
 def safe_request(method, url, **kwargs):
     for _ in range(3):
         try:
             r = requests.request(method, url, timeout=60, **kwargs)
             time.sleep(RATE_LIMIT_SLEEP)
             return r
-        except Exception:
+        except Exception as e:
+            print("Request error:", e)
             time.sleep(2)
     return None
 
+# ---------- CLEAN ----------
 def clean(text):
     text = re.sub(r'<[^>]+>', '', text or '')
     return re.sub(r'\s+', ' ', text).strip()
@@ -48,31 +50,51 @@ def safe_title(text):
     text = clean(text)
     return text[:70] if text else "Untitled Product"
 
-# ---------- FETCH SUPPLIER (FIXED PAGINATION) ----------
+# ---------- SUPPLIER FETCH (DEBUG SAFE) ----------
 def get_supplier_products():
-    products = []
+    all_products = []
     page = 1
 
     while True:
         url = f"{SUPPLIER_API_URL}?page={page}"
         r = safe_request("GET", url, headers=supplier_headers)
 
-        if not r or r.status_code != 200:
+        if not r:
+            print("❌ No response from supplier API")
             break
 
-        data = r.json().get("products", [])
+        print(f"\n🔍 Supplier STATUS PAGE {page}:", r.status_code)
+        print("RAW SAMPLE:", r.text[:300])  # DEBUG OUTPUT
 
-        if not data:
+        if r.status_code != 200:
             break
 
-        products.extend(data)
+        try:
+            data = r.json()
+        except Exception:
+            print("❌ Invalid JSON response")
+            break
 
-        if len(data) < 50:
+        # FLEXIBLE KEY HANDLING (IMPORTANT FIX)
+        products = (
+            data.get("products")
+            or data.get("data")
+            or data.get("items")
+            or []
+        )
+
+        if not products:
+            print("⚠️ No products found in response")
+            break
+
+        all_products.extend(products)
+
+        if len(products) < 50:
             break
 
         page += 1
 
-    return products
+    return all_products
 
 # ---------- BUILD PAYLOAD ----------
 def build_payload(sp):
@@ -119,10 +141,12 @@ def create_product(payload):
 def sync():
     supplier = get_supplier_products()
 
+    print("\n==============================")
+    print("TOTAL SUPPLIER PRODUCTS:", len(supplier))
+    print("==============================\n")
+
     created = 0
     failed = 0
-
-    print(f"🔄 Supplier products found: {len(supplier)}")
 
     for sp in supplier:
         sid = sp.get("id")
