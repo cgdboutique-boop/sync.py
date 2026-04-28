@@ -2,6 +2,7 @@
 
 import os
 import time
+import json
 import re
 import requests
 
@@ -48,7 +49,7 @@ def safe_title(text):
     text = clean(text)
     return text[:70] if text else "Untitled Product"
 
-# ---------- Fetch supplier ----------
+# ---------- Fetch ----------
 def get_supplier_products():
     r = safe_request("GET", SUPPLIER_API_URL, headers=supplier_headers)
     if not r or r.status_code != 200:
@@ -63,17 +64,22 @@ def build_payload(sp):
     title = safe_title(sp.get("title"))
     desc = clean(sp.get("body_html"))
 
-    # 🔥 FIXED VARIANT STRUCTURE (THIS WAS YOUR ERROR)
-    variants = []
-    for i, v in enumerate(sp.get("variants", [])):
-        sku = (v.get("sku") or "").strip() or f"{supplier_id}-{i+1}"
-        price = str(v.get("price") or "0.00")
+    # =========================================================
+    # FIXED VARIANT LOGIC (THIS WAS BREAKING YOUR SYNC)
+    # =========================================================
 
-        variants.append({
+    first_variant = (sp.get("variants") or [{}])[0]
+
+    sku = (first_variant.get("sku") or "").strip() or f"{supplier_id}"
+    price = str(first_variant.get("price") or "0.00")
+
+    variants = [
+        {
             "option1": "Default Title",
             "price": price,
             "sku": sku
-        })
+        }
+    ]
 
     # images
     images = []
