@@ -2,7 +2,6 @@
 
 import os
 import time
-import json
 import re
 import requests
 
@@ -49,39 +48,52 @@ def safe_title(text):
     text = clean(text)
     return text[:70] if text else "Untitled Product"
 
-# ---------- Fetch ----------
+# ---------- FETCH SUPPLIER (FIXED PAGINATION) ----------
 def get_supplier_products():
-    r = safe_request("GET", SUPPLIER_API_URL, headers=supplier_headers)
-    if not r or r.status_code != 200:
-        print("❌ Supplier fetch failed")
-        return []
-    return r.json().get("products", [])
+    products = []
+    page = 1
 
-# ---------- Build payload ----------
+    while True:
+        url = f"{SUPPLIER_API_URL}?page={page}"
+        r = safe_request("GET", url, headers=supplier_headers)
+
+        if not r or r.status_code != 200:
+            break
+
+        data = r.json().get("products", [])
+
+        if not data:
+            break
+
+        products.extend(data)
+
+        if len(data) < 50:
+            break
+
+        page += 1
+
+    return products
+
+# ---------- BUILD PAYLOAD ----------
 def build_payload(sp):
     supplier_id = sp.get("id")
 
     title = safe_title(sp.get("title"))
     desc = clean(sp.get("body_html"))
 
-    # =========================================================
-    # FIXED VARIANT LOGIC (THIS WAS BREAKING YOUR SYNC)
-    # =========================================================
-
     first_variant = (sp.get("variants") or [{}])[0]
 
     sku = (first_variant.get("sku") or "").strip() or f"{supplier_id}"
     price = str(first_variant.get("price") or "0.00")
 
-    variants = [
-        {
-            "option1": "Default Title",
-            "price": price,
-            "sku": sku
-        }
-    ]
+    variants = [{
+        "option1": "Default Title",
+        "price": price,
+        "sku": sku,
+        "inventory_management": "shopify",
+        "inventory_quantity": 10
+    }]
 
-    # images
     images = []
     for img in sp.get("images", []):
         if img.get("src"):
@@ -98,12 +110,12 @@ def build_payload(sp):
         }
     }
 
-# ---------- Create ----------
+# ---------- CREATE ----------
 def create_product(payload):
     url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
     return safe_request("POST", url, headers=shopify_headers, json=payload)
 
-# ---------- Main ----------
+# ---------- MAIN ----------
 def sync():
     supplier = get_supplier_products()
 
