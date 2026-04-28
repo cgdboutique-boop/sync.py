@@ -1,11 +1,9 @@
-#!/usr/bin/env python3
-
 import os
 import time
 import re
 import requests
 
-# ---------- CONFIG ----------
+# ---------- Config ----------
 SHOPIFY_API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2025-07")
 TARGET_VENDOR = "CGD Kids Boutique"
 RATE_LIMIT_SLEEP = 0.6
@@ -29,150 +27,181 @@ supplier_headers = {
     "Accept": "application/json"
 }
 
-# ---------- REQUEST ----------
+# ---------- Helpers ----------
 def safe_request(method, url, **kwargs):
     for _ in range(3):
         try:
             r = requests.request(method, url, timeout=60, **kwargs)
             time.sleep(RATE_LIMIT_SLEEP)
             return r
-        except Exception as e:
-            print("Request error:", e)
+        except Exception:
             time.sleep(2)
     return None
 
-# ---------- CLEAN ----------
 def clean(text):
     text = re.sub(r'<[^>]+>', '', text or '')
     return re.sub(r'\s+', ' ', text).strip()
 
-def safe_title(text):
-    text = clean(text)
-    return text[:70] if text else "Untitled Product"
-
-# ---------- SUPPLIER FETCH (DEBUG SAFE) ----------
+# ---------- Fetch Supplier ----------
 def get_supplier_products():
-    all_products = []
-    page = 1
+    r = safe_request("GET", SUPPLIER_API_URL, headers=supplier_headers)
+    if not r or r.status_code != 200:
+        print("❌ Supplier fetch failed")
+        return []
+
+    return r.json().get("products", [])
+
+# ---------- Shopify fetch ----------
+def get_all_shopify_products():
+    products = []
+    since_id = 0
 
     while True:
-        url = f"{SUPPLIER_API_URL}?page={page}"
-        r = safe_request("GET", url, headers=supplier_headers)
+        url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
+        params = {"limit": 250, "since_id": since_id}
 
-        if not r:
-            print("❌ No response from supplier API")
+        r = safe_request("GET", url, headers=shopify_headers, params=params)
+        if not r or r.status_code != 200:
             break
 
-        print(f"\n🔍 Supplier STATUS PAGE {page}:", r.status_code)
-        print("RAW SAMPLE:", r.text[:300])  # DEBUG OUTPUT
-
-        if r.status_code != 200:
+        batch = r.json().get("products", [])
+        if not batch:
             break
 
-        try:
-            data = r.json()
-        except Exception:
-            print("❌ Invalid JSON response")
-            break
+        products.extend(batch)
+        since_id = max([p["id"] for p in batch])
 
-        # FLEXIBLE KEY HANDLING (IMPORTANT FIX)
-        products = (
-            data.get("products")
-            or data.get("data")
-            or data.get("items")
-            or []
-        )
+    return products
 
-        if not products:
-            print("⚠️ No products found in response")
-            break
+# ---------- Index ----------
+def build_index(products):
+    idx = {"tag": {}, "sku": {}}
 
-        all_products.extend(products)
+    for p in products:
+        tags = p.get("tags", "")
+        for t in tags.split(","):
+            t = t.strip()
+            if t.startswith("supplier:"):
+                idx["tag"][t] = p
 
-        if len(products) < 50:
-            break
+        for v in p.get("variants", []):
+            sku = (v.get("sku") or "").strip()
+            if sku:
+                idx["sku"][sku] = p
 
-        page += 1
+    return idx
 
-    return all_products
+# ---------- Safety check ----------
+def check_shopify_by_tag(tag):
+    url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
+    params = {"limit": 250, "fields": "id,tags"}
 
-# ---------- BUILD PAYLOAD ----------
+    r = safe_request("GET", url, headers=shopify_headers, params=params)
+    if not r or r.status_code != 200:
+        return None
+
+    for p in r.json().get("products", []):
+        if tag in p.get("tags", ""):
+            return p
+
+    return None
+
+# ---------- Build payload ----------
 def build_payload(sp):
     supplier_id = sp.get("id")
+    tag = f"supplier:{supplier_id}"
 
-    title = safe_title(sp.get("title"))
-    desc = clean(sp.get("body_html"))
+    # ✅ FIXED mapping
+    title = clean(sp.get("title") or "")[:70]
+    desc = clean(sp.get("body_html") or "")
 
-    first_variant = (sp.get("variants") or [{}])[0]
+    variants = []
+    for i, v in enumerate(sp.get("variants", [])):
+        sku = (v.get("sku") or "").strip() or f"{supplier_id}-{i+1}"
 
-    sku = (first_variant.get("sku") or "").strip() or f"{supplier_id}"
-    price = str(first_variant.get("price") or "0.00")
-
-    variants = [{
-        "option1": "Default Title",
-        "price": price,
-        "sku": sku,
-        "inventory_management": "shopify",
-        "inventory_quantity": 10
-    }]
-
-    images = []
-    for img in sp.get("images", []):
-        if img.get("src"):
-            images.append({"src": img["src"]})
+        variants.append({
+            "sku": sku,
+            "price": str(v.get("price") or "0.00")
+        })
 
     return {
         "product": {
             "title": title,
             "body_html": desc,
             "vendor": TARGET_VENDOR,
-            "tags": f"supplier:{supplier_id}",
-            "variants": variants,
-            "images": images
+            "tags": tag,
+            "variants": variants
         }
     }
 
-# ---------- CREATE ----------
+# ---------- Create ----------
 def create_product(payload):
     url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
     return safe_request("POST", url, headers=shopify_headers, json=payload)
 
-# ---------- MAIN ----------
+# ---------- Update ----------
+def update_product(pid, payload):
+    url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products/{pid}.json"
+    return safe_request("PUT", url, headers=shopify_headers, json=payload)
+
+# ---------- Main ----------
 def sync():
     supplier = get_supplier_products()
-
-    print("\n==============================")
-    print("TOTAL SUPPLIER PRODUCTS:", len(supplier))
-    print("==============================\n")
+    shopify = get_all_shopify_products()
+    idx = build_index(shopify)
 
     created = 0
-    failed = 0
+    updated = 0
+    skipped = 0
+
+    print(f"🔄 Supplier products found: {len(supplier)}")
 
     for sp in supplier:
         sid = sp.get("id")
         if not sid:
+            skipped += 1
             continue
 
+        tag = f"supplier:{sid}"
         payload = build_payload(sp)
 
-        print(f"🆕 Creating product {sid}")
+        found = idx["tag"].get(tag)
 
-        res = create_product(payload)
+        # SKU fallback
+        if not found:
+            for v in sp.get("variants", []):
+                sku = (v.get("sku") or "").strip()
+                if sku and sku in idx["sku"]:
+                    found = idx["sku"][sku]
+                    break
 
-        if res and res.status_code in (200, 201):
-            created += 1
+        if not found:
+            found = check_shopify_by_tag(tag)
+
+        if found:
+            res = update_product(found["id"], payload)
+            if res and res.status_code in (200, 201):
+                updated += 1
+            else:
+                print(f"⚠️ Update failed for {sid}")
         else:
-            failed += 1
-            print(f"❌ Create failed for {sid}")
-            try:
-                print("STATUS:", res.status_code)
-                print("RESPONSE:", res.text)
-            except:
-                pass
+            print(f"🆕 Creating product {sid}")
+            res = create_product(payload)
 
-    print("\n--- SYNC COMPLETE ---")
+            if res and res.status_code in (200, 201):
+                created += 1
+
+                newp = res.json().get("product")
+                if newp:
+                    shopify.append(newp)
+                    idx = build_index(shopify)
+            else:
+                print(f"❌ Create failed for {sid}")
+
+    print("\n--- SAFE SYNC COMPLETE ---")
     print("Created:", created)
-    print("Failed:", failed)
+    print("Updated:", updated)
+    print("Skipped:", skipped)
 
 if __name__ == "__main__":
     sync()
