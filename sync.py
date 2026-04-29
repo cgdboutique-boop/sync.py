@@ -113,9 +113,8 @@ def build_payload(sp):
     supplier_id = sp.get("id")
     tag = f"supplier:{supplier_id}"
 
-    # ✅ FIX 1: Correct mapping
-    title = clean(sp.get("title") or "")[:70]
-    desc = clean(sp.get("body_html") or "")
+    title = clean(sp.get("body_html") or "")[:70]
+    desc = clean(sp.get("title") or "")
 
     variants = []
     for i, v in enumerate(sp.get("variants", [])):
@@ -189,14 +188,11 @@ def sync():
                 created += 1
                 newp = res.json().get("product")
 
+                # FULL index update (critical fix)
                 if newp:
                     idx = build_index(shopify + [newp])
             else:
                 print(f"❌ Create failed for {sid}")
-                # ✅ FIX 2: Show real error
-                if res:
-                    print("STATUS:", res.status_code)
-                    print("RESPONSE:", res.text)
 
     print("\n--- SAFE SYNC COMPLETE ---")
     print(f"Created: {created}")
