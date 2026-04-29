@@ -1,5 +1,9 @@
+#!/usr/bin/env python3
+
 import os
 import time
+import json
+import argparse
 import re
 import requests
 
@@ -42,16 +46,14 @@ def clean(text):
     text = re.sub(r'<[^>]+>', '', text or '')
     return re.sub(r'\s+', ' ', text).strip()
 
-# ---------- Fetch Supplier ----------
+# ---------- Fetch ----------
 def get_supplier_products():
     r = safe_request("GET", SUPPLIER_API_URL, headers=supplier_headers)
     if not r or r.status_code != 200:
         print("❌ Supplier fetch failed")
         return []
-
     return r.json().get("products", [])
 
-# ---------- Shopify fetch ----------
 def get_all_shopify_products():
     products = []
     since_id = 0
@@ -59,8 +61,8 @@ def get_all_shopify_products():
     while True:
         url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
         params = {"limit": 250, "since_id": since_id}
-
         r = safe_request("GET", url, headers=shopify_headers, params=params)
+
         if not r or r.status_code != 200:
             break
 
@@ -91,12 +93,12 @@ def build_index(products):
 
     return idx
 
-# ---------- Safety check ----------
+# ---------- Extra safety ----------
 def check_shopify_by_tag(tag):
     url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
     params = {"limit": 250, "fields": "id,tags"}
-
     r = safe_request("GET", url, headers=shopify_headers, params=params)
+
     if not r or r.status_code != 200:
         return None
 
@@ -118,7 +120,6 @@ def build_payload(sp):
     variants = []
     for i, v in enumerate(sp.get("variants", [])):
         sku = (v.get("sku") or "").strip() or f"{supplier_id}-{i+1}"
-
         variants.append({
             "sku": sku,
             "price": str(v.get("price") or "0.00")
@@ -134,12 +135,11 @@ def build_payload(sp):
         }
     }
 
-# ---------- Create ----------
+# ---------- Create / Update ----------
 def create_product(payload):
     url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
     return safe_request("POST", url, headers=shopify_headers, json=payload)
 
-# ---------- Update ----------
 def update_product(pid, payload):
     url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products/{pid}.json"
     return safe_request("PUT", url, headers=shopify_headers, json=payload)
@@ -150,11 +150,7 @@ def sync():
     shopify = get_all_shopify_products()
     idx = build_index(shopify)
 
-    created = 0
-    updated = 0
-    skipped = 0
-
-    print(f"🔄 Supplier products found: {len(supplier)}")
+    created = updated = skipped = 0
 
     for sp in supplier:
         sid = sp.get("id")
@@ -175,6 +171,7 @@ def sync():
                     found = idx["sku"][sku]
                     break
 
+        # FINAL safety check
         if not found:
             found = check_shopify_by_tag(tag)
 
@@ -190,18 +187,22 @@ def sync():
 
             if res and res.status_code in (200, 201):
                 created += 1
-
                 newp = res.json().get("product")
+
                 if newp:
                     shopify.append(newp)
                     idx = build_index(shopify)
             else:
                 print(f"❌ Create failed for {sid}")
+                if res:
+                    print("STATUS:", res.status_code)
+                    print("RESPONSE:", res.text)
 
     print("\n--- SAFE SYNC COMPLETE ---")
-    print("Created:", created)
-    print("Updated:", updated)
-    print("Skipped:", skipped)
+    print(f"Created: {created}")
+    print(f"Updated: {updated}")
+    print(f"Skipped: {skipped}")
 
+# ---------- Run ----------
 if __name__ == "__main__":
     sync()
