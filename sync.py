@@ -5,10 +5,10 @@ import time
 import re
 import requests
 
-# ---------- Config ----------
+# ---------- CONFIG ----------
 SHOPIFY_API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2025-07")
 TARGET_VENDOR = "CGD Kids Boutique"
-RATE_LIMIT_SLEEP = 0.6
+RATE_LIMIT_SLEEP = 0.5
 
 SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")
 SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN")
@@ -29,7 +29,7 @@ supplier_headers = {
     "Accept": "application/json"
 }
 
-# ---------- Helpers ----------
+# ---------- HELPERS ----------
 def safe_request(method, url, **kwargs):
     for _ in range(3):
         try:
@@ -44,7 +44,7 @@ def clean(text):
     text = re.sub(r'<[^>]+>', '', text or '')
     return re.sub(r'\s+', ' ', text).strip()
 
-# ---------- SUPPLIER (FIXED PAGINATION) ----------
+# ---------- SUPPLIER (PAGINATION FIXED) ----------
 def get_supplier_products():
     products = []
     url = SUPPLIER_API_URL
@@ -59,13 +59,11 @@ def get_supplier_products():
         data = r.json()
         products.extend(data.get("products", []))
 
-        # Shopify-style pagination via Link header
         link = r.headers.get("Link")
         url = None
 
         if link and 'rel="next"' in link:
-            next_part = link.split(";")[0]
-            url = next_part.strip("<> ")
+            url = link.split(";")[0].strip("<> ")
 
     return products
 
@@ -77,6 +75,7 @@ def get_all_shopify_products():
     while True:
         url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
         params = {"limit": 250, "since_id": since_id}
+
         r = safe_request("GET", url, headers=shopify_headers, params=params)
 
         if not r or r.status_code != 200:
@@ -108,10 +107,11 @@ def build_index(products):
 
     return idx
 
-# ---------- SAFETY CHECK ----------
+# ---------- SAFE CHECK ----------
 def check_shopify_by_tag(tag):
     url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
     params = {"limit": 250, "fields": "id,tags"}
+
     r = safe_request("GET", url, headers=shopify_headers, params=params)
 
     if not r or r.status_code != 200:
@@ -123,28 +123,35 @@ def check_shopify_by_tag(tag):
 
     return None
 
-# ---------- BUILD PAYLOAD ----------
+# ---------- BUILD PAYLOAD (FIXED VARIANTS + IMAGES) ----------
 def build_payload(sp):
     supplier_id = sp.get("id")
     tag = f"supplier:{supplier_id}"
 
-    title = clean(sp.get("title") or "")[:70]
+    title = clean(sp.get("title") or "")[:120]
     desc = clean(sp.get("body_html") or "")
 
-    first_variant = (sp.get("variants") or [{}])[0]
+    variants = []
 
-    sku = (first_variant.get("sku") or "").strip() or str(supplier_id)
+    for i, v in enumerate(sp.get("variants", [])):
+        sku = (v.get("sku") or "").strip() or f"{supplier_id}-{i+1}"
 
-    try:
-        price = str(float(first_variant.get("price") or 0))
-    except:
-        price = "0.00"
+        variants.append({
+            "option1": v.get("title") or "Default Title",
+            "sku": sku,
+            "price": str(v.get("price") or "0.00"),
+            "inventory_management": "shopify",
+            "inventory_policy": "continue",
+            "inventory_quantity": v.get("inventory_quantity", 0)
+        })
 
-    variants = [{
-        "option1": "Default Title",
-        "price": price,
-        "sku": sku
-    }]
+    # ---------- IMAGES ----------
+    images = []
+
+    if sp.get("images"):
+        for img in sp["images"]:
+            if img.get("src"):
+                images.append({"src": img["src"]})
 
     return {
         "product": {
@@ -152,7 +159,8 @@ def build_payload(sp):
             "body_html": desc,
             "vendor": TARGET_VENDOR,
             "tags": tag,
-            "variants": variants
+            "variants": variants,
+            "images": images
         }
     }
 
@@ -213,13 +221,12 @@ def sync():
             else:
                 print(f"❌ Create failed for {sid}")
                 if res:
-                    print("STATUS:", res.status_code)
-                    print("RESPONSE:", res.text)
+                    print(res.status_code, res.text)
 
     print("\n--- SYNC COMPLETE ---")
-    print(f"Created: {created}")
-    print(f"Updated: {updated}")
-    print(f"Skipped: {skipped}")
+    print("Created:", created)
+    print("Updated:", updated)
+    print("Skipped:", skipped)
 
 # ---------- RUN ----------
 if __name__ == "__main__":
