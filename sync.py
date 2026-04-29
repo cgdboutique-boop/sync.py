@@ -29,7 +29,7 @@ supplier_headers = {
     "Accept": "application/json"
 }
 
-# ---------- HELPERS ----------
+# ---------- REQUEST ----------
 def safe_request(method, url, **kwargs):
     for _ in range(3):
         try:
@@ -40,16 +40,25 @@ def safe_request(method, url, **kwargs):
             time.sleep(2)
     return None
 
+# ---------- CLEAN ----------
 def clean(text):
     text = re.sub(r'<[^>]+>', '', text or '')
     return re.sub(r'\s+', ' ', text).strip()
 
-# ---------- SUPPLIER (PAGINATION FIXED) ----------
+# ---------- SUPPLIER (FIXED PAGINATION - NO HANGS) ----------
 def get_supplier_products():
     products = []
     url = SUPPLIER_API_URL
 
+    seen_urls = set()
+
     while url:
+        if url in seen_urls:
+            print("⚠️ Pagination loop detected - stopping safely")
+            break
+
+        seen_urls.add(url)
+
         r = safe_request("GET", url, headers=supplier_headers)
 
         if not r or r.status_code != 200:
@@ -60,10 +69,17 @@ def get_supplier_products():
         products.extend(data.get("products", []))
 
         link = r.headers.get("Link")
-        url = None
+
+        next_url = None
 
         if link and 'rel="next"' in link:
-            url = link.split(";")[0].strip("<> ")
+            parts = link.split(",")
+            for part in parts:
+                if 'rel="next"' in part:
+                    next_url = part.split(";")[0].strip("<> ")
+                    break
+
+        url = next_url
 
     return products
 
@@ -107,7 +123,7 @@ def build_index(products):
 
     return idx
 
-# ---------- SAFE CHECK ----------
+# ---------- CHECK ----------
 def check_shopify_by_tag(tag):
     url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
     params = {"limit": 250, "fields": "id,tags"}
@@ -123,7 +139,7 @@ def check_shopify_by_tag(tag):
 
     return None
 
-# ---------- BUILD PAYLOAD (FIXED VARIANTS + IMAGES) ----------
+# ---------- PAYLOAD ----------
 def build_payload(sp):
     supplier_id = sp.get("id")
     tag = f"supplier:{supplier_id}"
@@ -145,7 +161,6 @@ def build_payload(sp):
             "inventory_quantity": v.get("inventory_quantity", 0)
         })
 
-    # ---------- IMAGES ----------
     images = []
 
     if sp.get("images"):
@@ -164,7 +179,7 @@ def build_payload(sp):
         }
     }
 
-# ---------- CREATE / UPDATE ----------
+# ---------- CREATE ----------
 def create_product(payload):
     url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
     return safe_request("POST", url, headers=shopify_headers, json=payload)
