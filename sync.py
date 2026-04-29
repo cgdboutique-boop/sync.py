@@ -3,7 +3,6 @@
 import os
 import time
 import json
-import argparse
 import re
 import requests
 
@@ -46,7 +45,7 @@ def clean(text):
     text = re.sub(r'<[^>]+>', '', text or '')
     return re.sub(r'\s+', ' ', text).strip()
 
-# ---------- Fetch ----------
+# ---------- Supplier ----------
 def get_supplier_products():
     r = safe_request("GET", SUPPLIER_API_URL, headers=supplier_headers)
     if not r or r.status_code != 200:
@@ -54,6 +53,7 @@ def get_supplier_products():
         return []
     return r.json().get("products", [])
 
+# ---------- Shopify fetch ----------
 def get_all_shopify_products():
     products = []
     since_id = 0
@@ -80,8 +80,7 @@ def build_index(products):
     idx = {"tag": {}, "sku": {}}
 
     for p in products:
-        tags = p.get("tags", "")
-        for t in tags.split(","):
+        for t in (p.get("tags") or "").split(","):
             t = t.strip()
             if t.startswith("supplier:"):
                 idx["tag"][t] = p
@@ -93,7 +92,7 @@ def build_index(products):
 
     return idx
 
-# ---------- Extra safety ----------
+# ---------- Safety check ----------
 def check_shopify_by_tag(tag):
     url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
     params = {"limit": 250, "fields": "id,tags"}
@@ -103,26 +102,35 @@ def check_shopify_by_tag(tag):
         return None
 
     for p in r.json().get("products", []):
-        if tag in p.get("tags", ""):
+        if tag in (p.get("tags") or ""):
             return p
 
     return None
 
-# ---------- Build payload ----------
+# ---------- Build payload (FIXED SAFE VARIANT) ----------
 def build_payload(sp):
     supplier_id = sp.get("id")
     tag = f"supplier:{supplier_id}"
 
-    title = clean(sp.get("body_html") or "")[:70]
-    desc = clean(sp.get("title") or "")
+    title = clean(sp.get("title") or "")[:70]
+    desc = clean(sp.get("body_html") or "")
 
-    variants = []
-    for i, v in enumerate(sp.get("variants", [])):
-        sku = (v.get("sku") or "").strip() or f"{supplier_id}-{i+1}"
-        variants.append({
-            "sku": sku,
-            "price": str(v.get("price") or "0.00")
-        })
+    first_variant = (sp.get("variants") or [{}])[0]
+
+    sku = (first_variant.get("sku") or "").strip() or str(supplier_id)
+    price = first_variant.get("price")
+
+    # force safe price
+    try:
+        price = str(float(price))
+    except:
+        price = "0.00"
+
+    variants = [{
+        "option1": "Default Title",
+        "price": price,
+        "sku": sku
+    }]
 
     return {
         "product": {
@@ -151,6 +159,8 @@ def sync():
 
     created = updated = skipped = 0
 
+    print(f"🔄 Supplier products found: {len(supplier)}")
+
     for sp in supplier:
         sid = sp.get("id")
         if not sid:
@@ -162,7 +172,6 @@ def sync():
 
         found = idx["tag"].get(tag)
 
-        # SKU fallback
         if not found:
             for v in sp.get("variants", []):
                 sku = (v.get("sku") or "").strip()
@@ -170,7 +179,6 @@ def sync():
                     found = idx["sku"][sku]
                     break
 
-        # FINAL safety check (live Shopify)
         if not found:
             found = check_shopify_by_tag(tag)
 
@@ -187,14 +195,16 @@ def sync():
             if res and res.status_code in (200, 201):
                 created += 1
                 newp = res.json().get("product")
-
-                # FULL index update (critical fix)
                 if newp:
-                    idx = build_index(shopify + [newp])
+                    shopify.append(newp)
+                    idx = build_index(shopify)
             else:
                 print(f"❌ Create failed for {sid}")
+                if res:
+                    print("STATUS:", res.status_code)
+                    print("RESPONSE:", res.text)
 
-    print("\n--- SAFE SYNC COMPLETE ---")
+    print("\n--- SYNC COMPLETE ---")
     print(f"Created: {created}")
     print(f"Updated: {updated}")
     print(f"Skipped: {skipped}")
