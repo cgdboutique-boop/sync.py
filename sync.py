@@ -113,7 +113,7 @@ def build_payload(sp):
     supplier_id = sp.get("id")
     tag = f"supplier:{supplier_id}"
 
-    # ✅ FIXED mapping
+    # ✅ FIX 1: Correct mapping
     title = clean(sp.get("title") or "")[:70]
     desc = clean(sp.get("body_html") or "")
 
@@ -171,7 +171,7 @@ def sync():
                     found = idx["sku"][sku]
                     break
 
-        # FINAL safety check
+        # FINAL safety check (live Shopify)
         if not found:
             found = check_shopify_by_tag(tag)
 
@@ -190,10 +190,10 @@ def sync():
                 newp = res.json().get("product")
 
                 if newp:
-                    shopify.append(newp)
-                    idx = build_index(shopify)
+                    idx = build_index(shopify + [newp])
             else:
                 print(f"❌ Create failed for {sid}")
+                # ✅ FIX 2: Show real error
                 if res:
                     print("STATUS:", res.status_code)
                     print("RESPONSE:", res.text)
