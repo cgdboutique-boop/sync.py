@@ -45,23 +45,20 @@ def clean(text):
     text = re.sub(r'<[^>]+>', '', text or '')
     return re.sub(r'\s+', ' ', text).strip()
 
-# ---------- SUPPLIER (SAFE PAGINATION) ----------
+# ---------- SUPPLIER ----------
 def get_supplier_products():
     products = []
     url = SUPPLIER_API_URL
-    seen_urls = set()
+    seen = set()
 
     while url:
-        if url in seen_urls:
-            print("⚠️ Pagination loop detected - stopping")
+        if url in seen:
             break
 
-        seen_urls.add(url)
+        seen.add(url)
 
         r = safe_request("GET", url, headers=supplier_headers)
-
         if not r or r.status_code != 200:
-            print("❌ Supplier fetch failed")
             break
 
         data = r.json()
@@ -71,8 +68,7 @@ def get_supplier_products():
         next_url = None
 
         if link and 'rel="next"' in link:
-            parts = link.split(",")
-            for part in parts:
+            for part in link.split(","):
                 if 'rel="next"' in part:
                     next_url = part.split(";")[0].strip("<> ")
                     break
@@ -81,7 +77,7 @@ def get_supplier_products():
 
     return products
 
-# ---------- SHOPIFY FETCH ----------
+# ---------- SHOPIFY ----------
 def get_all_shopify_products():
     products = []
     since_id = 0
@@ -91,7 +87,6 @@ def get_all_shopify_products():
         params = {"limit": 250, "since_id": since_id}
 
         r = safe_request("GET", url, headers=shopify_headers, params=params)
-
         if not r or r.status_code != 200:
             break
 
@@ -100,13 +95,13 @@ def get_all_shopify_products():
             break
 
         products.extend(batch)
-        since_id = max([p["id"] for p in batch])
+        since_id = max(p["id"] for p in batch)
 
     return products
 
 # ---------- INDEX ----------
 def build_index(products):
-    idx = {"tag": {}, "sku": {}}
+    idx = {"sku": {}, "tag": {}}
 
     for p in products:
         for t in (p.get("tags") or "").split(","):
@@ -129,26 +124,32 @@ def build_payload(sp):
     title = clean(sp.get("title") or "")[:120]
     desc = clean(sp.get("body_html") or "")
 
-    # 🔥 FIX TAGS (preserve supplier tags)
     supplier_tags = sp.get("tags", "")
     combined_tags = f"{supplier_tags}, {tag}" if supplier_tags else tag
 
-    # ---------- VARIANTS ----------
     variants = []
 
     for i, v in enumerate(sp.get("variants", [])):
         sku = (v.get("sku") or "").strip() or f"{supplier_id}-{i+1}"
+        qty = v.get("inventory_quantity", 0)
 
         variants.append({
             "option1": v.get("title") or "Default Title",
             "sku": sku,
             "price": str(v.get("price") or "0.00"),
+
+            # 🔥 IMPORTANT CHANGE HERE
             "inventory_management": "shopify",
-            "inventory_policy": "continue",
-            "inventory_quantity": v.get("inventory_quantity", 0)
+
+            # ❌ OLD: continue selling when out of stock
+            # "inventory_policy": "continue",
+
+            # ✅ NEW: DO NOT allow selling when stock is 0
+            "inventory_policy": "deny",
+
+            "inventory_quantity": qty
         })
 
-    # ---------- IMAGES ----------
     images = []
     if sp.get("images"):
         for img in sp["images"]:
@@ -181,14 +182,13 @@ def sync():
     shopify = get_all_shopify_products()
     idx = build_index(shopify)
 
-    created = updated = skipped = 0
+    created = updated = 0
 
-    print(f"\n🔄 Supplier products found: {len(supplier)}\n")
+    print(f"\n🔄 Supplier products: {len(supplier)}\n")
 
     for sp in supplier:
         sid = sp.get("id")
         if not sid:
-            skipped += 1
             continue
 
         tag = f"supplier:{sid}"
@@ -196,14 +196,14 @@ def sync():
 
         found = None
 
-        # 🔥 PRIORITY 1: SKU MATCH (prevents duplicates)
+        # SKU match first
         for v in sp.get("variants", []):
             sku = (v.get("sku") or "").strip()
             if sku and sku in idx["sku"]:
                 found = idx["sku"][sku]
                 break
 
-        # 🔥 PRIORITY 2: TAG MATCH
+        # tag fallback
         if not found:
             found = idx["tag"].get(tag)
 
@@ -212,24 +212,14 @@ def sync():
             if res and res.status_code in (200, 201):
                 updated += 1
         else:
-            print(f"🆕 Creating product {sid}")
+            print(f"🆕 Creating {sid}")
             res = create_product(payload)
-
             if res and res.status_code in (200, 201):
                 created += 1
-                newp = res.json().get("product")
-                if newp:
-                    shopify.append(newp)
-                    idx = build_index(shopify)
-            else:
-                print(f"❌ Create failed for {sid}")
-                if res:
-                    print(res.status_code, res.text)
 
     print("\n--- SYNC COMPLETE ---")
     print("Created:", created)
     print("Updated:", updated)
-    print("Skipped:", skipped)
 
 # ---------- RUN ----------
 if __name__ == "__main__":
