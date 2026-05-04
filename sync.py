@@ -45,16 +45,15 @@ def clean(text):
     text = re.sub(r'<[^>]+>', '', text or '')
     return re.sub(r'\s+', ' ', text).strip()
 
-# ---------- SUPPLIER (FIXED PAGINATION - NO HANGS) ----------
+# ---------- SUPPLIER (SAFE PAGINATION) ----------
 def get_supplier_products():
     products = []
     url = SUPPLIER_API_URL
-
     seen_urls = set()
 
     while url:
         if url in seen_urls:
-            print("⚠️ Pagination loop detected - stopping safely")
+            print("⚠️ Pagination loop detected - stopping")
             break
 
         seen_urls.add(url)
@@ -69,7 +68,6 @@ def get_supplier_products():
         products.extend(data.get("products", []))
 
         link = r.headers.get("Link")
-
         next_url = None
 
         if link and 'rel="next"' in link:
@@ -123,22 +121,6 @@ def build_index(products):
 
     return idx
 
-# ---------- CHECK ----------
-def check_shopify_by_tag(tag):
-    url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
-    params = {"limit": 250, "fields": "id,tags"}
-
-    r = safe_request("GET", url, headers=shopify_headers, params=params)
-
-    if not r or r.status_code != 200:
-        return None
-
-    for p in r.json().get("products", []):
-        if tag in (p.get("tags") or ""):
-            return p
-
-    return None
-
 # ---------- PAYLOAD ----------
 def build_payload(sp):
     supplier_id = sp.get("id")
@@ -147,6 +129,11 @@ def build_payload(sp):
     title = clean(sp.get("title") or "")[:120]
     desc = clean(sp.get("body_html") or "")
 
+    # 🔥 FIX TAGS (preserve supplier tags)
+    supplier_tags = sp.get("tags", "")
+    combined_tags = f"{supplier_tags}, {tag}" if supplier_tags else tag
+
+    # ---------- VARIANTS ----------
     variants = []
 
     for i, v in enumerate(sp.get("variants", [])):
@@ -161,8 +148,8 @@ def build_payload(sp):
             "inventory_quantity": v.get("inventory_quantity", 0)
         })
 
+    # ---------- IMAGES ----------
     images = []
-
     if sp.get("images"):
         for img in sp["images"]:
             if img.get("src"):
@@ -173,13 +160,13 @@ def build_payload(sp):
             "title": title,
             "body_html": desc,
             "vendor": TARGET_VENDOR,
-            "tags": tag,
+            "tags": combined_tags,
             "variants": variants,
             "images": images
         }
     }
 
-# ---------- CREATE ----------
+# ---------- CREATE / UPDATE ----------
 def create_product(payload):
     url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/products.json"
     return safe_request("POST", url, headers=shopify_headers, json=payload)
@@ -207,17 +194,18 @@ def sync():
         tag = f"supplier:{sid}"
         payload = build_payload(sp)
 
-        found = idx["tag"].get(tag)
+        found = None
 
-        if not found:
-            for v in sp.get("variants", []):
-                sku = (v.get("sku") or "").strip()
-                if sku and sku in idx["sku"]:
-                    found = idx["sku"][sku]
-                    break
+        # 🔥 PRIORITY 1: SKU MATCH (prevents duplicates)
+        for v in sp.get("variants", []):
+            sku = (v.get("sku") or "").strip()
+            if sku and sku in idx["sku"]:
+                found = idx["sku"][sku]
+                break
 
+        # 🔥 PRIORITY 2: TAG MATCH
         if not found:
-            found = check_shopify_by_tag(tag)
+            found = idx["tag"].get(tag)
 
         if found:
             res = update_product(found["id"], payload)
